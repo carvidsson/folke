@@ -141,3 +141,23 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Next.js
+/.next/
+/out/
+next-env.d.ts
+*.tsbuildinfo
+.vercel
+.env*
+!.env.example
+
+# Secrets and local credentials
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+
+# OS / editor
+.DS_Store
+Thumbs.db

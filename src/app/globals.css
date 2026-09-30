@@ -1,0 +1,248 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * Folke design tokens
+ * -------------------
+ * Derived from the two colours in the Folke logo:
+ *   navy  #111b2b  (wordmark)  -> text, primary actions, neutral scale tint
+ *   sage  #727d71  (symbol)    -> brand accent, focus rings, selected states
+ *
+ * Layers:
+ *   1. Brand scales (navy-*, sage-*) and a few muted assistant tones.
+ *   2. Semantic tokens (background, foreground, primary, border, ...) that
+ *      components use. Components should reference semantic tokens, not
+ *      brand scales, so the palette can evolve in one place.
+ *
+ * See docs/DESIGN.md for usage rules.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  /* Brand: navy (wordmark) */
+  --color-navy-50: #f5f6f8;
+  --color-navy-100: #eceef2;
+  --color-navy-200: #dadee5;
+  --color-navy-300: #b8bfcb;
+  --color-navy-400: #8a94a5;
+  --color-navy-500: #5f6a7c;
+  --color-navy-600: #465164;
+  --color-navy-700: #323c4d;
+  --color-navy-800: #202a3a;
+  --color-navy-900: #111b2b;
+  --color-navy-950: #0a111c;
+
+  /* Brand: sage (symbol) */
+  --color-sage-50: #f4f6f4;
+  --color-sage-100: #e8ebe7;
+  --color-sage-200: #d2d8d1;
+  --color-sage-300: #b3bcb2;
+  --color-sage-400: #919b90;
+  --color-sage-500: #727d71;
+  --color-sage-600: #5c665b;
+  --color-sage-700: #4a5249;
+  --color-sage-800: #3a403a;
+  --color-sage-900: #2a2f2a;
+
+  /* Status colours, kept muted to sit next to the brand palette */
+  --color-success: #2f7a4f;
+  --color-success-subtle: #eaf4ee;
+  --color-warning: #9a5b12;
+  --color-warning-subtle: #fbf1e3;
+  --color-info: #33577f;
+  --color-info-subtle: #ebf1f7;
+
+  /* Assistant tones: muted, used only for assistant avatars */
+  --color-tone-sage: #56614f;
+  --color-tone-sage-subtle: #eef1ec;
+  --color-tone-slate: #3d5573;
+  --color-tone-slate-subtle: #edf1f6;
+  --color-tone-sand: #80663a;
+  --color-tone-sand-subtle: #f6f2e8;
+  --color-tone-clay: #86513f;
+  --color-tone-clay-subtle: #f6eeea;
+
+  /* Typography */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  /* Elevation: navy-tinted, deliberately faint */
+  --shadow-xs: 0 1px 2px 0 rgb(17 27 43 / 0.04);
+  --shadow-sm: 0 1px 2px 0 rgb(17 27 43 / 0.05), 0 1px 3px 0 rgb(17 27 43 / 0.04);
+  --shadow-md: 0 2px 4px -1px rgb(17 27 43 / 0.05), 0 4px 12px -2px rgb(17 27 43 / 0.06);
+  --shadow-lg: 0 4px 8px -2px rgb(17 27 43 / 0.05), 0 12px 32px -4px rgb(17 27 43 / 0.08);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-subtle: var(--brand-subtle);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --radius: 0.5rem;
+
+  /* Surfaces */
+  --background: #ffffff;
+  --surface: #f7f8f9;
+  --foreground: var(--color-navy-900);
+  --card: #ffffff;
+  --card-foreground: var(--color-navy-900);
+  --popover: #ffffff;
+  --popover-foreground: var(--color-navy-900);
+
+  /* Text */
+  --muted-foreground: var(--color-navy-500);
+  --subtle-foreground: var(--color-navy-400);
+
+  /* Actions */
+  --primary: var(--color-navy-900);
+  --primary-foreground: #ffffff;
+  --secondary: var(--color-navy-50);
+  --secondary-foreground: var(--color-navy-900);
+  --muted: var(--color-navy-50);
+  --accent: var(--color-navy-50);
+  --accent-foreground: var(--color-navy-900);
+  --destructive: #b42318;
+
+  /* Brand accent */
+  --brand: var(--color-sage-500);
+  --brand-foreground: var(--color-sage-700);
+  --brand-subtle: var(--color-sage-50);
+
+  /* Lines */
+  --border: #e6e9ed;
+  --input: #dde1e7;
+  --ring: var(--color-sage-400);
+
+  /* Charts (for the analysis assistant, later) */
+  --chart-1: var(--color-navy-900);
+  --chart-2: var(--color-sage-500);
+  --chart-3: var(--color-navy-400);
+  --chart-4: var(--color-sage-300);
+  --chart-5: var(--color-navy-200);
+
+  /* Sidebar */
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--color-navy-700);
+  --sidebar-primary: var(--color-navy-900);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eceef1;
+  --sidebar-accent-foreground: var(--color-navy-900);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: var(--color-sage-200);
+    color: var(--color-navy-900);
+  }
+}
+
+@layer components {
+  /* Typographic hierarchy – see docs/DESIGN.md */
+  .text-display {
+    @apply text-[1.75rem] leading-9 font-semibold tracking-[-0.02em];
+  }
+  .text-title {
+    @apply text-xl leading-7 font-semibold tracking-[-0.015em];
+  }
+  .text-heading {
+    @apply text-base leading-6 font-semibold tracking-[-0.01em];
+  }
+  .text-body {
+    @apply text-sm leading-6;
+  }
+  .text-caption {
+    @apply text-xs leading-5 text-muted-foreground;
+  }
+  .text-overline {
+    @apply text-[0.6875rem] leading-4 font-medium tracking-[0.06em] text-subtle-foreground uppercase;
+  }
+
+  /* Thin, unobtrusive scrollbars for scroll containers */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-navy-200) transparent;
+  }
+}
+
+@keyframes folke-typing {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
