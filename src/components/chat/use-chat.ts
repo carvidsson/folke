@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 
 import { streamChat } from "@/lib/chat/client";
+import type { ConversationMode } from "@/lib/chat/protocol";
 import type { Attachment, Message } from "@/lib/domain/types";
 
 export type ChatStatus = "idle" | "submitted" | "streaming" | "error";
@@ -26,10 +27,13 @@ export function useChat({
   assistantId,
   conversationId: initialConversationId,
   initialMessages = [],
+  mode = "standard",
 }: {
   assistantId: string;
   conversationId: string | null;
   initialMessages?: Message[];
+  /** Requested mode for a NEW conversation (the server decides and verifies). */
+  mode?: ConversationMode;
 }) {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -38,6 +42,7 @@ export function useChat({
   const conversationId = useRef<string | null>(initialConversationId);
   const lastOutgoing = useRef<OutgoingMessage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [engine, setEngine] = useState<{ provider: "mock" | "openai"; model: string | null } | null>(null);
 
   const send = useCallback(
     async (outgoing: OutgoingMessage, { isRetry = false } = {}) => {
@@ -66,6 +71,7 @@ export function useChat({
           {
             assistantId,
             conversationId: conversationId.current,
+            mode: conversationId.current ? undefined : mode,
             message: {
               content: outgoing.text,
               attachments: outgoing.attachments.map(({ name, mimeType, sizeBytes }) => ({ name, mimeType, sizeBytes })),
@@ -73,6 +79,7 @@ export function useChat({
           },
           (event) => {
             if (event.type === "conversation") {
+              setEngine({ provider: event.provider, model: event.model });
               if (event.created) {
                 conversationId.current = event.conversationId;
                 createdConversation = true;
@@ -83,6 +90,14 @@ export function useChat({
             if (event.type === "text") {
               setStatus("streaming");
               update((m) => ({ ...m, content: m.content + event.delta }));
+            }
+            // The server's final version: invalid citations removed, only cited sources.
+            if (event.type === "done") {
+              update((m) => ({
+                ...m,
+                content: event.content || m.content,
+                sources: event.sources.length ? event.sources : undefined,
+              }));
             }
             if (event.type === "error") throw new Error(event.message);
           },
@@ -105,10 +120,10 @@ export function useChat({
         if (createdConversation) router.refresh();
       }
     },
-    [assistantId, router],
+    [assistantId, mode, router],
   );
 
-  /** Re-send the last message after an error (the server stores it again). */
+  /** Re-send the last message after an error (the server removed the failed question). */
   const retry = useCallback(() => {
     if (lastOutgoing.current) void send(lastOutgoing.current, { isRetry: true });
   }, [send]);
@@ -120,6 +135,7 @@ export function useChat({
     status,
     error,
     isBusy: status === "submitted" || status === "streaming",
+    engine,
     send: (outgoing: OutgoingMessage) => void send(outgoing),
     retry,
     stop,

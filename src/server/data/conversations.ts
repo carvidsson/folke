@@ -3,6 +3,7 @@ import "server-only";
 import type {
   Attachment,
   Conversation,
+  ConversationDataClass,
   ConversationSummary,
   ID,
   Message,
@@ -21,6 +22,7 @@ interface ConversationRow {
   user_id: string;
   assistant_id: string;
   title: string;
+  data_class: ConversationDataClass;
   created_at: string;
   last_message_at: string;
 }
@@ -34,7 +36,7 @@ interface MessageRow {
   created_at: string;
 }
 
-const CONVERSATION_COLUMNS = "id, user_id, assistant_id, title, created_at, last_message_at";
+const CONVERSATION_COLUMNS = "id, user_id, assistant_id, title, data_class, created_at, last_message_at";
 
 function toSummary(row: ConversationRow): ConversationSummary {
   return {
@@ -42,6 +44,7 @@ function toSummary(row: ConversationRow): ConversationSummary {
     assistantId: row.assistant_id,
     ownerId: row.user_id,
     title: row.title,
+    dataClass: row.data_class,
     createdAt: row.created_at,
     updatedAt: row.last_message_at,
     preview: "",
@@ -75,15 +78,28 @@ export async function getConversation(ownerId: ID, id: ID): Promise<Conversation
       .maybeSingle<ConversationRow & { messages: MessageRow[] }>(),
   );
   if (!row) return null;
-  const messages: Message[] = row.messages.map((m) => ({
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    createdAt: m.created_at,
-    sources: m.sources?.length ? m.sources : undefined,
-    attachments: m.attachments?.length
-      ? m.attachments.map((a, i) => ({ ...a, id: `${m.id}-a${i}` }))
-      : undefined,
-  }));
+
+  // Stored sources are only shown while the user can still read the
+  // document, so old answers do not become a way around revoked access.
+  const referenced = [...new Set(row.messages.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
+  const readable = new Set(
+    referenced.length
+      ? unwrap(await supabase.from("documents").select("id").in("id", referenced).returns<{ id: string }[]>()).map(
+          (d) => d.id,
+        )
+      : [],
+  );
+
+  const messages: Message[] = row.messages.map((m) => {
+    const sources = (m.sources ?? []).filter((s) => readable.has(s.documentId));
+    return {
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      createdAt: m.created_at,
+      sources: sources.length ? sources : undefined,
+      attachments: m.attachments?.length ? m.attachments.map((a, i) => ({ ...a, id: `${m.id}-a${i}` })) : undefined,
+    };
+  });
   return { ...toSummary(row), messages };
 }

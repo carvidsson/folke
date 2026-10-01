@@ -5,6 +5,7 @@ import {
   Gauge,
   KeyRound,
   ScrollText,
+  Sparkles,
   Users,
   UsersRound,
 } from "lucide-react";
@@ -53,6 +54,10 @@ export function AdminSidebar({ user }: { user: User }) {
         </SidebarSection>
         {isAdmin && (
           <SidebarSection title="Drift och säkerhet">
+            <SidebarNavLink href="/admin/ai">
+              <Sparkles />
+              AI och modeller
+            </SidebarNavLink>
             <SidebarNavLink href="/admin/usage">
               <Gauge />
               Användning och kostnad

@@ -11,6 +11,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { PGlite, type Transaction } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite-pgvector";
 
 const MIGRATIONS_DIR = join(process.cwd(), "supabase", "migrations");
 
@@ -35,6 +36,10 @@ const SUPABASE_BOOTSTRAP = /* sql */ `
   grant usage on schema auth to anon, authenticated, service_role;
   grant execute on all functions in schema auth to anon, authenticated, service_role;
 
+  -- Supabase installs extensions (pgvector) in the "extensions" schema.
+  create schema extensions;
+  grant usage on schema extensions to anon, authenticated, service_role;
+
   create schema storage;
   create table storage.buckets (
     id text primary key, name text not null, public boolean,
@@ -47,7 +52,7 @@ const SUPABASE_BOOTSTRAP = /* sql */ `
 `;
 
 export async function createTestDatabase(): Promise<PGlite> {
-  const db = await PGlite.create();
+  const db = await PGlite.create({ extensions: { vector } });
   await db.exec(SUPABASE_BOOTSTRAP);
   for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort()) {
     try {
@@ -129,5 +134,24 @@ export async function asService<T>(db: PGlite, fn: (tx: Transaction) => Promise<
     await tx.exec("set local role service_role");
     result = await fn(tx);
   });
+  return result!;
+}
+
+/** Like asService, but always rolled back (for tests that must not leave data). */
+export async function asServiceRollback<T>(db: PGlite, fn: (tx: Transaction) => Promise<T>): Promise<T> {
+  let result: T;
+  let failure: unknown;
+  await db
+    .transaction(async (tx) => {
+      await tx.exec("set local role service_role");
+      try {
+        result = await fn(tx);
+      } catch (error) {
+        failure = error;
+      }
+      await tx.rollback();
+    })
+    .catch(() => undefined);
+  if (failure) throw failure;
   return result!;
 }

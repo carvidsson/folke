@@ -163,16 +163,42 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 **Beslut:** Gallring av konversationer startas manuellt av administratör (minst 12 månaders inaktivitet). Inaktiverade konton, säkerhetslogg och kostnadsstatistik raderas inte automatiskt.
 **Motiv:** Det finns inget beslut om automatisk radering. Lagringstider för logg och statistik samt rutin för att radera konton är öppna beslut.
 
+### ADR-031 – Dataspärr: endast syntetiska data till extern AI
+
+**Beslut:** OpenAI får bara ta emot syntetiska testdokument och syntetiska testkonversationer, både för embeddings och svar. Spärren avgörs av data som användare inte kan ändra: dokumentets dataklass (bara servern sätter den, och den kan aldrig ändras), konversationens dataklass (kräver AI-testbehörighet och kan aldrig ändras), AI-testbehörigheten (bara systemadministratör) och servermiljön. En slutkontroll körs före varje anrop, och en trigger stoppar embeddings för andra dokument. Klassen `approved` är reserverad för ett framtida godkännandeflöde men nekas.
+**Motiv:** Leverantörsavtal och behandling av intern information är inte godkända. Flera oberoende lager gör att ett enskilt fel inte räcker för att data ska läcka.
+
+### ADR-032 – OpenAI via Responses API, utan lagring och utan omförsök
+
+**Beslut:** Officiell SDK, Responses API med strömning, `store: false`, `max_output_tokens`, pseudonym `safety_identifier` och `maxRetries: 0`. Inga verktyg, inga vector stores och inga filuppladdningar. Dokument och vektorer lagras bara i Supabase. Endast endpointen `api.openai.com` eller `eu.api.openai.com` (den senare bara med godkänd regional åtkomst).
+**Motiv:** Minsta möjliga data hos leverantören och full kontroll över behörigheter i databasen. Omförsök kan dubblera kostnad och svar. Användaren försöker själv igen.
+
+### ADR-033 – Modellval per assistent i databasen, mot en central katalog
+
+**Beslut:** Tillåtna modeller, med verifierat pris och tillgänglighet, finns i `src/server/ai/models.ts`. Systemadministratören väljer modell per assistent i `/admin/ai`. Valet sparas i `assistants.ai_model` och kontrolleras mot katalogen vid varje anrop, och okända värden ger standardmodellen. Miljövariabeln `FOLKE_CHAT_MODELS` kan bara begränsa katalogen. Standard är den billigaste modellen (`gpt-6-luna`), och `gpt-6.1-sol` är det avancerade alternativet. Svenska kvalitetstester (`npm run test:ai-eval`) avgör om en assistent behöver det avancerade alternativet.
+**Motiv:** Byten utan driftsättning, men inga ogranskade modeller och inga nya endpoints. Samma begränsningar (spärr, budget, maxlängd) gäller alla modeller.
+**Resultat 2026-10-01:** Båda modellerna klarade 21 av 21 svenska fall. `gpt-6-luna` kostade 0,002 USD och `gpt-6.1-sol` 0,049 USD för samma fall, och luna var cirka 2,3 gånger snabbare. Standard för alla fyra assistenter: `gpt-6-luna`. Mötesassistenten följde mallen (sammanfattning, beslut, åtgärdstabell) fullständigare med sol och är kandidat för en uppgradering om fullständiga protokoll efterfrågas.
+
+### ADR-034 – Hybridsökning med pgvector i Supabase
+
+**Beslut:** `halfvec(1536)` med HNSW-index (cosinus) i `document_chunks` och `text-embedding-3-small`. Svensk fulltext och vektorlikhet slås ihop med reciprocal rank fusion i en SECURITY INVOKER-funktion, så att RLS gäller varje rad. Vektorer jämförs bara när de skapats med samma modell som frågan. Utan vektor faller sökningen tillbaka på fulltext. Ersätter ADR-019 för syntetiska data. Interna dokument har inga vektorer.
+**Motiv:** Semantiska frågor ("hur långt kommer den billigaste versionen") hittas, utan extern vektortjänst, och med samma behörighetsmodell som tidigare.
+
+### ADR-035 – Kostnadskontroll i databasen
+
+**Beslut:** `ai_usage` registrerar typ (chatt eller embedding), tokens, cachade tokens, kostnad i USD (och SEK enligt kurs i miljön) samt om värdena är uppskattade. `ai_begin_request` kontrollerar atomiskt budget per användare och dag, månadsbudget, samtidighet och frågor per minut innan ett externt anrop görs.
+**Motiv:** OpenAI-projektets budget är ingen garanterad hård gräns. Ett pågående anrop kan överskrida gränsen marginellt, men det begränsas av `max_output_tokens`.
+
 ---
 
 ## Öppna beslut
 
 | Fråga | Alternativ | Att väga in |
 |---|---|---|
-| **AI-leverantör** | Inriktning: OpenAI med EU-datalagring ([MVP-0.3-PLAN.md](MVP-0.3-PLAN.md)) | Godkännande för EU-datalagring och ZDR/MAM, DPA, att valda modeller omfattas av regional behandling |
+| **AI-leverantör för intern information** | OpenAI (används nu bara med syntetiska data, ADR-031) | Juridisk motpart, DPA, EU-dataresidens och regional behandling, underbiträden, loggning och lagring (ZDR/MAM). Se [SECURITY.md](SECURITY.md#extern-ai-openai). |
 | **Lagringstid för säkerhetslogg och kostnadsstatistik** | t.ex. 12–24 månader | Krav på spårbarhet kontra minimering |
 | **Radering av konton** | Manuell rutin, alternativt automatiskt efter X månader som inaktiverat | Dokument som personen laddat upp måste flyttas först |
-| **Embeddings och vektorlager** | pgvector i Supabase | Kräver godkänd leverantör. Fulltextsökning används tills dess (ADR-019). |
+| **Embeddings för interna dokument** | pgvector i Supabase (byggt, ADR-034) | Kräver godkänd leverantör och godkännandeflöde. Interna dokument använder fulltext tills dess. |
 | **OCR för skannade PDF:er** | Lokal OCR, alternativt tjänst | Skannade dokument ger ingen text i dag och markeras som fel vid bearbetning |
 | **Supabase-plan** | Free (nu) eller Pro | Pro rekommenderas före pilot: time-box för sessioner, skydd mot läckta lösenord, säkerhetskopior |
 | **SSO** | E-post + lösenord + TOTP (planerat), eventuellt Microsoft Entra ID senare | Befintlig identitetsplattform hos Börjessons |

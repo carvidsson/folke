@@ -14,6 +14,9 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const RUN = `${Date.now().toString(36)}${crypto.randomBytes(2).toString("hex")}`;
 
+/** AI tests change data classes and need the AI migration: development project only. */
+export const isDevelopmentProject = process.env.FOLKE_ENVIRONMENT === "development";
+
 export function env() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishable = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -122,6 +125,7 @@ export async function createDocument({
   chunks,
   reviewStatus = "approved",
   validUntil = null,
+  dataClass = "internal",
 }: {
   title: string;
   ownerGroupId: string;
@@ -130,6 +134,8 @@ export async function createDocument({
   chunks: string[];
   reviewStatus?: "pending" | "approved" | "rejected" | "archived";
   validUntil?: string | null;
+  /** "synthetic" may only be set by the server (service role), as here. */
+  dataClass?: "internal" | "synthetic";
 }) {
   const admin = service();
   const text = chunks.join("\n\n");
@@ -150,6 +156,7 @@ export async function createDocument({
       valid_from: "2026-01-01",
       valid_until: validUntil,
       tags: ["syntetisk"],
+      ai_data_class: dataClass,
     })
     .select("id")
     .single();
@@ -184,6 +191,7 @@ export async function cleanup() {
     }
   }
   for (const g of created.groups) await admin.from("groups").delete().eq("id", g);
+  if (created.users.length) await admin.from("ai_requests").delete().in("user_id", created.users);
   // Usage rows would otherwise survive as "deleted user" in cost statistics.
   if (created.users.length) await admin.from("ai_usage").delete().in("user_id", created.users);
   for (const u of created.users) await admin.auth.admin.deleteUser(u);

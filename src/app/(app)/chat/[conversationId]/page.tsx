@@ -35,6 +35,7 @@ export default async function ConversationPage({ params }: PageProps<"/chat/[con
       conversation={{
         id: conversation.id,
         title: conversation.title,
+        dataClass: conversation.dataClass,
         messages: conversation.messages,
       }}
     />

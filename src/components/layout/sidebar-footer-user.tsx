@@ -13,7 +13,7 @@ export function SidebarFooterUser({ user }: { user: User }) {
     <SidebarFooter>
       <p className="mb-2 flex items-center gap-1.5 px-1.5 text-[0.6875rem] text-subtle-foreground">
         <FlaskConical className="size-3.5" strokeWidth={1.75} />
-        {serverEnv().FOLKE_AI_PROVIDER === "mock" ? "Pilot · AI i mockläge" : "Pilot"}
+        {serverEnv().FOLKE_AI_PROVIDER === "mock" ? "Pilot · AI i mockläge" : "Test · OpenAI endast för syntetiska data"}
       </p>
       <UserMenu
         user={{

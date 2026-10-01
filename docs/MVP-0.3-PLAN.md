@@ -1,6 +1,6 @@
 # MVP 0.3 – plan: OpenAI och semantisk sökning
 
-**Status:** förslag för gemensam genomgång. Inget är implementerat. Ingen API-nyckel finns och inga AI-anrop görs.
+**Status (uppdaterad 2026-10-01):** implementerat med **syntetiska data** som enda tillåtna data till OpenAI. Planen nedan är det ursprungliga underlaget. Avvikelser och beslut finns i ADR-031–035 ([DECISIONS.md](DECISIONS.md)), aktuell status i [ROADMAP.md](ROADMAP.md) och handhavande i [SETUP.md avsnitt 10](SETUP.md#10-ai-med-openai-endast-syntetiska-testdata). Viktigaste avvikelser: utvecklingsprojektet använder den globala endpointen (EU-dataresidens är inte godkänd), standardmodellen är `gpt-6-luna` efter svenska kvalitetstester, och modellen väljs per assistent i administrationen.
 **Underlag:** OpenAI:s API-dokumentation, läst 2026-10-01 ([data controls](https://developers.openai.com/api/docs/guides/your-data), [modeller](https://developers.openai.com/api/docs/models), [priser](https://developers.openai.com/api/docs/pricing), [embeddings](https://developers.openai.com/api/docs/guides/embeddings)). Uppgifterna ska bekräftas mot avtal och aktuell dokumentation innan beslut. Punkter markerade **⚠ Öppet** är inte verifierade.
 
 ---

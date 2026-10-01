@@ -27,7 +27,12 @@ export type SecurityEvent =
   | "document.uploaded"
   | "document.downloaded"
   | "document.processed"
-  | "chat.provider_error";
+  | "chat.provider_error"
+  | "ai.model_changed"
+  | "ai.test_access_changed"
+  | "ai.synthetic_corpus_loaded"
+  | "ai.synthetic_corpus_removed"
+  | "ai.embeddings_indexed";
 
 export async function logSecurityEvent(
   action: SecurityEvent,

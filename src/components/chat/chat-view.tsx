@@ -7,9 +7,12 @@ import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "rea
 import { toast } from "sonner";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
+import { StatusBadge } from "@/components/common/status-badge";
 import { useShell } from "@/components/layout/app-shell";
 import { SidebarCollapseButton } from "@/components/layout/sidebar-collapse-button";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { takePendingPrompt } from "@/lib/chat/pending-prompt";
-import type { Assistant, Message } from "@/lib/domain/types";
+import type { Assistant, ConversationDataClass, Message } from "@/lib/domain/types";
 import { deleteConversationAction } from "@/server/chat/actions";
 
 import { AssistantPicker } from "./assistant-picker";
@@ -29,18 +32,24 @@ export function ChatView({
   assistants,
   initialAssistantId,
   conversation,
+  syntheticModeAvailable = false,
 }: {
   assistants: Assistant[];
   initialAssistantId: string;
-  conversation?: { id: string; title: string; messages: Message[] };
+  conversation?: { id: string; title: string; dataClass: ConversationDataClass; messages: Message[] };
+  /** The user may start synthetic test conversations with OpenAI. */
+  syntheticModeAvailable?: boolean;
 }) {
   const [assistantId, setAssistantId] = useState(initialAssistantId);
   const assistant = assistants.find((a) => a.id === assistantId) ?? assistants[0];
+  const [syntheticRequested, setSyntheticRequested] = useState(false);
+  const synthetic = conversation ? conversation.dataClass === "synthetic" : syntheticModeAvailable && syntheticRequested;
 
   const chat = useChat({
     assistantId: assistant.id,
     conversationId: conversation?.id ?? null,
     initialMessages: conversation?.messages,
+    mode: synthetic ? "synthetic" : "standard",
   });
   const { messages, status, isBusy, send } = chat;
   const isEmpty = messages.length === 0;
@@ -63,8 +72,15 @@ export function ChatView({
       // File contents are not processed in chat yet (see docs/ROADMAP.md).
       allowAttachments={false}
       autoFocus
-      placeholder={`Fråga ${assistant.name}…`}
+      placeholder={synthetic ? "Ställ en testfråga om de syntetiska dokumenten…" : `Fråga ${assistant.name}…`}
     />
+  );
+
+  const syntheticNotice = synthetic && (
+    <p className="text-caption mt-2 text-center text-warning">
+      Syntetiskt testläge: endast syntetiska testdokument används
+      {chat.engine?.provider === "mock" ? "." : " och frågan skickas till OpenAI."} Skriv inte in verklig information.
+    </p>
   );
 
   return (
@@ -72,6 +88,14 @@ export function ChatView({
       <ChatHeader
         title={conversation?.title}
         conversationId={conversation?.id}
+        badge={
+          synthetic && (
+            <StatusBadge tone="warning" className="ml-1">
+              Syntetiskt test
+              {chat.engine ? ` · ${chat.engine.provider === "openai" ? (chat.engine.model ?? "OpenAI") : "mockläge"}` : ""}
+            </StatusBadge>
+          )
+        }
         picker={
           <AssistantPicker
             assistants={assistants}
@@ -93,6 +117,15 @@ export function ChatView({
               </p>
             </div>
             {composer}
+            {syntheticModeAvailable && (
+              <div className="mt-3 flex items-center justify-center gap-2">
+                <Switch id="synthetic-mode" checked={syntheticRequested} onCheckedChange={setSyntheticRequested} />
+                <Label htmlFor="synthetic-mode" className="text-sm font-normal text-muted-foreground">
+                  Syntetiskt testläge med OpenAI
+                </Label>
+              </div>
+            )}
+            {syntheticNotice}
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
               {assistant.suggestedPrompts.map((prompt) => (
                 <button
@@ -139,9 +172,11 @@ export function ChatView({
           <div className="shrink-0 px-4 pb-3 sm:px-6">
             <div className="mx-auto max-w-3xl">
               {composer}
-              <p className="text-caption mt-2 text-center">
-                Folke kan göra fel. Kontrollera viktig information mot källorna.
-              </p>
+              {syntheticNotice || (
+                <p className="text-caption mt-2 text-center">
+                  Folke kan göra fel. Kontrollera viktig information mot källorna.
+                </p>
+              )}
             </div>
           </div>
         </>
@@ -153,10 +188,12 @@ export function ChatView({
 function ChatHeader({
   title,
   picker,
+  badge,
   conversationId,
 }: {
   title?: string;
   picker: React.ReactNode;
+  badge?: React.ReactNode;
   conversationId?: string;
 }) {
   const { sidebarVisible, openMobileNav } = useShell();
@@ -190,6 +227,7 @@ function ChatHeader({
       </Button>
       {!sidebarVisible && <SidebarCollapseButton label="Visa sidopanel" />}
       {picker}
+      {badge}
       {title && (
         <>
           <span aria-hidden className="mx-1 hidden text-navy-200 md:inline">

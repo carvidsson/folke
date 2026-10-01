@@ -8,6 +8,7 @@
 4. **Konversationer är privata.** Det finns ingen policy som ger administratörer läsrätt.
 5. **Explicita behörigheter.** API-rollerna får bara de tabell- och kolumnbehörigheter de behöver (`20261001120000_api_grants.sql`). `anon` får inga. RLS avgör vilka rader som nås.
 6. **Ingen innehållsloggning.** Säkerhetsloggen och kostnadsloggen innehåller aldrig konversations- eller dokumentinnehåll.
+7. **Ingen intern information till extern AI.** Endast syntetiska testdata får skickas till OpenAI. Spärren avgörs på servern och i databasen, aldrig av klienten (se *Extern AI*).
 
 ## Behörighetsmatris
 
@@ -25,6 +26,12 @@
 | Filer (Storage) | Signerad länk (60 s) efter RLS-kontroll | Engångs-URL för uppladdning efter RLS-kontrollerad insert | Servern |
 | Konversationer, meddelanden | **Endast ägaren** | Ägaren (bara med tilldelad assistent). Meddelanden kan inte ändras. | Ägaren. Gallring via admin, endast efter ≥ 12 månaders inaktivitet. |
 | Kostnadslogg | Egna rader, admin allt | Endast servern | – |
+| Dataklass för dokument (`ai_data_class`) | Som dokumentet | Endast servern vid skapande. Kan **aldrig** ändras, inte ens av servern. | – |
+| AI-testbehörighet (`ai_test_access`) | Som profilen | Endast systemadministratör, via servern. Loggas. | – |
+| Dataklass för konversation (`data_class`) | Ägaren | `synthetic` kräver AI-testbehörighet. Kan inte ändras. | – |
+| Modellval per assistent (`ai_model`) | Behöriga användare | Endast systemadministratör, via servern, kontrollerat mot modellkatalogen. Loggas. | – |
+| Embeddings | Som textbitarna | Endast servern, och bara för syntetiska dokument (trigger) | Kaskad |
+| Anropslogg för AI (`ai_requests`) | Endast servern | Endast servern | Servern |
 | Säkerhetslogg | Systemadministratör | Triggers och servern | Ingen |
 
 ## Skydd mot vanliga angrepp
@@ -44,6 +51,12 @@
 | Felaktig filtyp | Filtyp från filändelse plus kontroll av filsignaturen. Maxstorlek 50 MB i bucket och kod. |
 | Kunduppgifter i pilot | Obligatoriskt intygande (`internal_only_attested_at`) och granskning före publicering. |
 | Förfalskad kostnad | `ai_usage` kan inte skrivas av användare. |
+| Intern information till OpenAI | Dataspärr i flera lager, se *Extern AI*. Varje lager testas för sig. |
+| Promptinjektion via användarens fråga | Reglerna säger uttryckligen att frågor inte kan upphäva regler, behörigheter eller källor. Behörigheter avgörs i databasen innan modellen anropas, så modellen kan aldrig nå otillåtna dokument. Testat med riktiga anrop (avslöja systemprompt, använd förbjuden källa, strunta i spärrar). |
+| Påhittade källor | Modellen får bara citera numrerade utdrag som servern hämtat. Andra nummer tas bort innan svaret sparas, och endast citerade utdrag sparas som källor. |
+| Bakdörr via gamla svar | Sparade källor visas bara medan användaren kan läsa dokumentet. Tidigare svar som bygger på dokument som inte längre är läsbara skickas inte med i historiken till modellen. |
+| Kostnadsattack eller loop | Budget per användare och dag, månadsbudget, samtidighets- och minutgräns i databasen (atomiskt). Maxlängd på svar. Inga automatiska omförsök. |
+| Läckt OpenAI-nyckel | Nyckeln finns bara i servermiljön och loggas aldrig. Felmeddelanden till användare innehåller aldrig leverantörens feltext. Separat, begränsat OpenAI-projekt för utveckling. |
 | Insyn i privata konversationer | Det finns ingen admin-policy för konversationer. Gallringsvyn visar bara antal. |
 
 ## Tester
@@ -72,6 +85,50 @@ Begränsning: Supabase Auth, Storage och PostgREST körs inte i PGlite. Därför
 - gallring
 - att säkerhetsloggen saknar hemligheter
 
+**MVP 0.3:** `tests/db/ai-guard.test.ts` (25 tester) täcker dataklasser, AI-testbehörighet, embeddings-spärren, hybridsökning med RLS, gränser och modellval. Samma spärrar testas live i `tests/live/ai.test.ts`, som bara körs mot utvecklingsprojektet. Enhetstester täcker routingen, slutkontrollen, OpenAI-leverantören mot en fejkad klient (parametrar, användning och felmappning), källkontrollen och historikfiltret. `npm run test:ai-eval` kör 21 svenska fall med riktiga anrop, bland dem tre injektionsfall, ett behörighetsfall och två giltighetsfall.
+
+## Extern AI (OpenAI)
+
+**Policy (ADR-031):** befintliga och uppladdade dokument och konversationer är **inte** godkända för extern AI-behandling. Bara särskilt markerade syntetiska testdokument och syntetiska testkonversationer får skickas till OpenAI, och det gäller både embeddings och svar. Policyn gäller tills leverantörsavtal och behandling av Börjessons interna information är godkända.
+
+### Spärren i lager
+
+| Lager | Vad det stoppar |
+|---|---|
+| `FOLKE_AI_PROVIDER` (server) | Standard är `mock`, så inga externa anrop görs alls. Pilotprojektet körs i mockläge. |
+| `FOLKE_AI_EXTERNAL_DATA=synthetic-only` | Det enda tillåtna värdet. Allt annat stoppar uppstarten av AI-funktionen. |
+| `documents.ai_data_class` | Standard är `internal`. Bara servern kan skapa `synthetic`. Klassen kan aldrig ändras, så befintliga dokument kan inte bli tillåtna genom ändrad metadata. `approved` är reserverad och nekas. |
+| `profiles.ai_test_access` | Bara systemadministratören kan ge behörigheten, via servern, och ändringen loggas. Användare kan inte ge sig själva den. |
+| `conversations.data_class` | En syntetisk konversation kan bara skapas med AI-testbehörighet (RLS) och kan aldrig ändras. Vanliga konversationer besvaras alltid i mockläge. |
+| Hämtning | Syntetiska konversationer hämtar **bara** syntetiska dokument, och RLS gäller som vanligt (grupp, assistent, granskning, giltighet). |
+| Slutkontroll före anrop (`assertExternalAllowed`) | Avbryter om konversationen inte är syntetisk, om behörigheten saknas eller om något utdrag inte är syntetiskt |
+| Trigger på `document_chunks` | Embeddings kan bara sparas för syntetiska dokument, även med servernyckeln |
+
+Användarens egen text i en syntetisk konversation kan tekniskt sett innehålla vad som helst. Därför ges testbehörighet bara till utsedda testare, och gränssnittet varnar tydligt: "Skriv inte in verklig information".
+
+### Anropen
+
+- OpenAI:s officiella SDK och Responses API med strömning, `store: false` och `max_output_tokens`. Inga verktyg, ingen filuppladdning och inga vector stores. Dokument och vektorer lagras bara i Supabase.
+- `safety_identifier` är en pseudonym hash av användar-id, inte e-post eller namn.
+- `maxRetries: 0` och tidsgräns 45 sekunder. Fel visas på svenska utan leverantörens feltext. En fråga som misslyckas tas bort, så att ett nytt försök inte ger dubbla meddelanden.
+- Endast endpoints `api.openai.com` och `eu.api.openai.com` accepteras. Den senare används bara om projektet har godkänd EU-dataresidens.
+
+### Öppna avtals- och integritetsfrågor (blockerar intern information)
+
+| Fråga | Status |
+|---|---|
+| Juridisk motpart (OpenAI Ireland Ltd för EU-kunder?) och vem som tecknar för Börjessons | Öppen |
+| Personuppgiftsbiträdesavtal (DPA) | Öppen |
+| EU-dataresidens: projekt i regionen Europe, krav på godkännande, +10 % på nyare modeller | Öppen. Utvecklingsprojektet använder den globala endpointen. |
+| Underbiträden och tredjelandsöverföring | Öppen |
+| Loggning och lagring hos OpenAI: `store: false` är **inte** Zero Data Retention. Standard för missbruksövervakning är upp till 30 dagar. ZDR eller Modified Abuse Monitoring kräver godkännande. | Öppen |
+| Att API-data inte används för träning (enligt OpenAI:s villkor) bekräftas i avtalet | Öppen |
+| Beslut om vilka dokumentkategorier som får behandlas (aktiverar `approved`) | Förberett i databasen, inte aktiverat |
+
+### Framtida godkännandeflöde (förberett, inte aktiverat)
+
+Dataklassen `approved` finns i schemat men nekas av triggern. När avtalen är godkända behövs: en migration som tillåter `internal → approved` endast via en godkännandefunktion för systemadministratörer (med loggning och motivering), utökad hämtning och embeddings för `approved` samt en ny `FOLKE_AI_EXTERNAL_DATA`-policy. Inget av detta kan aktiveras genom konfiguration.
+
 ## Granskning 2026-10-01
 
 Utförd mot den riktiga Supabase-miljön (se SETUP.md, avsnitt 2):
@@ -89,7 +146,7 @@ Utförd mot den riktiga Supabase-miljön (se SETUP.md, avsnitt 2):
 
 ## Kvar att göra
 
-- Rate limiting på `/api/chat` och inloggning. Supabase begränsar inloggning, men appen begränsar inte chatten ännu.
+- Rate limiting av chatten i mockläge och av inloggning i appen. Externa AI-anrop begränsas sedan MVP 0.3. Supabase begränsar inloggning.
 - Larm på upprepade misslyckade inloggningar och nekad åtkomst.
 - Periodisk genomgång av behörigheter (pilotansvarig).
 - Penetrationstest före bredare utrullning.

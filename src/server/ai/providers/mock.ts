@@ -49,19 +49,22 @@ export function estimateTokens(text: string) {
 
 export const mockProvider: AIProvider = {
   id: "mock",
+  external: false,
 
-  async *streamChat({ system, messages, context, signal }: ChatCompletionInput) {
+  async *streamChat({ system, messages, context, signal, onUsage }: ChatCompletionInput) {
     await sleep(500, signal);
     const answer = composeMockAnswer(context);
     for (const piece of answer.match(/\S+\s*|\s+/g) ?? [answer]) {
       await sleep(12, signal);
       yield { type: "text", delta: piece };
     }
-    yield {
-      type: "usage",
+    onUsage?.({
       model: "mock",
       inputTokens: estimateTokens(system + messages.map((m) => m.content).join("\n")),
+      cachedInputTokens: 0,
       outputTokens: estimateTokens(answer),
-    };
+      reasoningTokens: 0,
+      estimated: true,
+    });
   },
 };

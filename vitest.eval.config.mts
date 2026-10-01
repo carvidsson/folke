@@ -2,6 +2,8 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
 
+// Quality evaluation with REAL OpenAI calls on synthetic data only.
+// Opt-in and billed (a few cents): npm run test:ai-eval
 export default defineConfig({
   resolve: {
     alias: {
@@ -10,12 +12,9 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["tests/**/*.test.ts", "src/**/*.test.ts"],
-    // Live tests hit the real Supabase project: npm run test:live
-    exclude: ["tests/live/**", "node_modules/**"],
+    include: ["tests/ai-eval/**/*.eval.ts"],
     environment: "node",
-    setupFiles: ["tests/setup-env.ts"],
-    testTimeout: 30_000,
-    hookTimeout: 60_000,
+    testTimeout: 600_000,
+    fileParallelism: false,
   },
 });

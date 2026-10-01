@@ -14,7 +14,8 @@
     "bootstrap:admin": "node --env-file=.env.local scripts/bootstrap-admin.mjs",
     "seed:synthetic": "node --env-file=.env.local scripts/seed-synthetic.mjs",
     "db:push": "npx supabase db push",
-    "test:live": "node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.live.config.mts"
+    "test:live": "node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.live.config.mts",
+    "test:ai-eval": "node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.eval.config.mts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
@@ -26,6 +27,7 @@
     "lucide-react": "^1.49.0",
     "mammoth": "^1.13.0",
     "next": "16.3.8",
+    "openai": "^7.25.0",
     "radix-ui": "^1.6.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -41,6 +43,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-pgvector": "^0.0.9",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

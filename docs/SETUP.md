@@ -2,7 +2,7 @@
 
 Gemensam referens för utvecklingsmiljön. Dokumentera **aldrig** nycklar, lösenord eller andra hemligheter här.
 
-**Senast uppdaterad:** 2026-10-01 · **Version:** MVP 0.2 · **Miljö:** utveckling (lokalt mot Supabase-projektet i Stockholm) · **AI:** mockläge
+**Senast uppdaterad:** 2026-10-01 · **Version:** MVP 0.3 (under utveckling) · **Miljöer:** pilotprojektet och ett separat utvecklingsprojekt i Stockholm (avsnitt 4) · **AI:** mockläge, OpenAI endast för syntetiska testdata i utvecklingsprojektet (avsnitt 10)
 
 ---
 
@@ -14,7 +14,7 @@ Gemensam referens för utvecklingsmiljön. Dokumentera **aldrig** nycklar, löse
 |---|---|
 | Projekt | **North EU (Stockholm)**, plan **Free** under utvecklingen |
 | CLI | Länkat till projektet (`npx supabase link`) |
-| Migrationer | Alla **åtta** i `supabase/migrations/` är körda. Den senaste är `20261002100000_require_mfa_enrollment.sql` (avsnitt 6). |
+| Migrationer | Pilotprojektet: de **åtta** migrationerna i MVP 0.2 är körda, till och med `20261002100000_require_mfa_enrollment.sql`. MVP 0.3-migrationen `20261003090000_ai_integration.sql` körs **först i utvecklingsprojektet** och i pilotprojektet bara efter godkännande (avsnitt 6). |
 | Registrering | Öppen registrering **avstängd**. Användare skapas bara via inbjudan. |
 | MFA | TOTP **aktiverat** |
 | Lösenord | Minst **12 tecken** |
@@ -81,7 +81,7 @@ Senaste verifiering: **2026-10-01**. Den gjordes med syntetiska testanvändare (
 | Gallring av riktigt gamla konversationer | Testad med syntetisk, bakdaterad konversation. Gäller i praktiken först efter 12 månader. |
 | Mobil layout med riktiga data | Skärmdumpar är granskade. Bör provas på telefon. |
 | Skannade PDF:er | Stöds inte (ingen OCR) och markeras som fel |
-| Riktig AI-modell | Planeras i MVP 0.3 ([MVP-0.3-PLAN.md](MVP-0.3-PLAN.md)) |
+| Riktig AI-modell med interna dokument | Inte tillåtet förrän leverantörsavtal och behandling är godkända. Med syntetiska data, se avsnitt 10. |
 
 ---
 
@@ -91,9 +91,25 @@ Senaste verifiering: **2026-10-01**. Den gjordes med syntetiska testanvändare (
 npm install
 npm run dev          # http://localhost:3000
 npm run check        # lint + typecheck + enhets- och RLS-tester (lokalt, PGlite)
-npm run test:live    # säkerhetstester mot det riktiga Supabase-projektet (syntetiska användare)
+npm run test:live    # säkerhetstester mot Supabase-projektet i .env.local (syntetiska användare)
+npm run test:ai-eval # svenska kvalitetstester med riktiga OpenAI-anrop, endast syntetiska data (kostar några cent)
 npm run build
 ```
+
+### Två Supabase-projekt
+
+| Projekt | Används till | AI |
+|---|---|---|
+| **Pilotprojektet** (det befintliga) | Christoffers administratörskonto, MFA, grupper och dokument. Lämnas orört under MVP 0.3. | Mockläge |
+| **Utvecklingsprojektet** `folke-dev` (Stockholm, Free) | Nya migrationer, livetester och AI-tester med syntetiska data | OpenAI för syntetiska testkonversationer |
+
+`.env.local` pekar på utvecklingsprojektet under MVP 0.3. Pilotens värden sparas i `.env.pilot.local` (ignoreras av git, precis som `.env.local`). Byt miljö genom att byta fil och länka CLI:t:
+
+```bash
+npx supabase link --project-ref <projekt-ref>   # dev eller pilot
+```
+
+> **Kör inte MVP 0.3-koden mot pilotprojektet** förrän migrationen har körts där. Koden läser kolumner som bara finns efter `20261003090000_ai_integration.sql`. Tills dess används `git checkout v0.2.0` mot piloten.
 
 ### Miljövariabler (`.env.local`)
 
@@ -105,7 +121,9 @@ Mallen finns i `.env.example`. `.env.local` ignoreras av git och delas aldrig, i
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | API Keys → Publishable key | Publik (RLS skyddar data) |
 | `SUPABASE_SECRET_KEY` | API Keys → Secret key | **Endast server.** Kringgår RLS. |
 | `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` lokalt | Används i e-postlänkar |
-| `FOLKE_AI_PROVIDER` | `mock` | Ändras först när en leverantör är godkänd |
+| `FOLKE_AI_PROVIDER` | `mock` (pilot) eller `openai` (utveckling) | `openai` gäller **endast** syntetiska testkonversationer (avsnitt 10) |
+| `FOLKE_ENVIRONMENT` | `development` i utvecklingsprojektet | Krävs för att AI-livetesterna ska köras |
+| `OPENAI_API_KEY` m.fl. | OpenAI-projektet, se avsnitt 10 och `.env.example` | **Endast server** |
 
 Om en hemlig nyckel kan ha exponerats: rotera den i Supabase (API Keys) och uppdatera `.env.local`.
 
@@ -149,9 +167,12 @@ Skriptet är idempotent. En befintlig användare får rollen utan ny inbjudan oc
 ## 6. Databasändringar
 
 1. Skapa en **ny** migration i `supabase/migrations/` (`YYYYMMDDHHMMSS_namn.sql`). Ändra aldrig en migration som redan körts.
-2. Nya tabeller behöver: RLS, policies, **explicita `grant`** till `authenticated` och `service_role` (projektet ger inga automatiska tabellbehörigheter) samt tester i `tests/db/rls.test.ts`.
+2. Nya tabeller behöver: RLS, policies, **explicita `grant`** till `authenticated` och `service_role` (projektet ger inga automatiska tabellbehörigheter) samt tester i `tests/db/`.
 3. `npm run test:db`
-4. `npx supabase db push --dry-run` och sedan `npm run db:push`.
+4. Kontrollera att CLI:t är länkat till **utvecklingsprojektet**, kör `npx supabase db push --dry-run` och sedan `npm run db:push`. Kör `npm run test:live`.
+5. Pilotprojektet uppdateras först efter godkännande, med samma steg.
+
+**MVP 0.3** (`20261003090000_ai_integration.sql`) är additiv: nya kolumner med säkra standardvärden (`internal`, `false`, `null`), nya tabeller och funktioner samt tillägget `vector`. Inga data tas bort. Befintliga dokument och konversationer blir `internal` och kan aldrig klassas om.
 
 ---
 
@@ -174,7 +195,7 @@ Skriptet är idempotent. En befintlig användare får rollen utan ny inbjudan oc
 
 | Beslut | Kommentar |
 |---|---|
-| **AI-leverantör** | Ingen godkänd. Förslag: OpenAI med EU-datalagring, se [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md) (öppna avtalsfrågor finns där). |
+| **AI-leverantör för intern information** | Ingen godkänd. OpenAI används bara med syntetiska testdata. Öppna avtalsfrågor: se [SECURITY.md](SECURITY.md#extern-ai-openai). |
 | **Lagringstid för säkerhetslogg och kostnadsstatistik** | Sparas i dag utan tidsgräns (se [ARCHITECTURE.md – Livscykel](ARCHITECTURE.md#livscykel-och-gallring)) |
 | **Radering av användarkonton** | I dag kan konton bara inaktiveras. Rutin för permanent radering (t.ex. vid anställningens slut) behöver beslutas. |
 | **Supabase Pro** | Ger tidsbegränsade sessioner i Auth, skydd mot läckta lösenord, dagliga säkerhetskopior och fler resurser. 7-dagarsgränsen gäller redan via appen och databasen. |
@@ -195,3 +216,85 @@ Skriptet är idempotent. En befintlig användare får rollen utan ny inbjudan oc
 | Inloggad men tomma listor | Användaren saknar grupper eller assistentbehörigheter. |
 | "Koden stämmer inte" vid TOTP | Kontrollera att telefonens tid är automatisk. Skanna den senast visade QR-koden. |
 | Inget mejl kommer fram | Kontrollera Resend → Logs och Supabase → Auth Logs. |
+| AI: "Du har nått dagens AI-budget" | Spärr per användare (`FOLKE_AI_USER_DAILY_LIMIT_USD`). Höj värdet i `.env.local` eller vänta till nästa dag. |
+| AI: "Den valda AI-modellen är inte tillgänglig" | Modellen saknas i OpenAI-projektet. **Administration → AI och modeller → Kontrollera modeller**. |
+| AI: "AI-tjänsten är felkonfigurerad" | Nyckeln saknas, är fel eller saknar behörighet till Responses/Embeddings. Kontrollera nyckeln i OpenAI-projektet. |
+| Syntetiskt testläge syns inte i chatten | Kräver `FOLKE_AI_PROVIDER=openai`, en nyckel och **AI-testbehörighet** för användaren (Administration → AI och modeller). |
+
+---
+
+## 10. AI med OpenAI (endast syntetiska testdata)
+
+Gäller tills leverantörsavtal och behandling av Börjessons interna information är godkända. Bakgrund: [SECURITY.md](SECURITY.md#extern-ai-openai) och ADR-031–035 i [DECISIONS.md](DECISIONS.md).
+
+### Vad som skickas till OpenAI
+
+| Skickas | Skickas aldrig |
+|---|---|
+| Frågor och svar i **syntetiska testkonversationer** av användare med AI-testbehörighet | Konversationer i vanligt läge, även för samma användare |
+| Utdrag ur dokument med dataklass `synthetic` (syntetiska testdokument) | Dokument med dataklass `internal`, det vill säga alla befintliga och uppladdade dokument |
+| Embeddings av syntetiska textavsnitt och av frågor i syntetiska konversationer | Hela filer. Inga vector stores, inga filuppladdningar och inga verktyg. |
+
+Anrop görs med `store: false`, utan automatiska omförsök och med maxlängd för svaren. `store: false` innebär **inte** Zero Data Retention.
+
+### Aktivera lokalt (utvecklingsprojektet)
+
+1. Lägg in i `.env.local`: `FOLKE_AI_PROVIDER=openai`, `OPENAI_API_KEY` (projektet *Folke Development*) och `FOLKE_ENVIRONMENT=development`. Övriga AI-variabler har standardvärden, se `.env.example`.
+2. `npm run dev` och logga in som systemadministratör.
+3. **Administration → AI och modeller**:
+   - **Kontrollera modeller.** Visar vilka modeller i katalogen projektet har tillgång till. Inga tokens förbrukas.
+   - **Läs in testdokument.** Skapar gruppen *AI-test (syntetiskt)*, ger gruppen alla fyra assistenter och lägger in nio fiktiva dokument.
+   - **Skapa embeddings.** Kostar mindre än 0,01 USD för hela testsamlingen.
+   - Slå på **AI-testbehörighet** för testanvändaren. Användaren läggs då i testgruppen.
+4. Öppna **Ny chatt**, slå på **Syntetiskt testläge med OpenAI** och ställ en fråga. Huvudet visar *Syntetiskt test · gpt-6-luna*.
+
+### Byta modell
+
+Under **Administration → AI och modeller → Modell per assistent** väljer du bland godkända modeller. Kostnadsnivå och ungefärlig kostnad per svar visas. Bytet gäller direkt, utan kodändring eller driftsättning.
+
+- Listan med tillåtna modeller finns centralt i `src/server/ai/models.ts`, med pris och datum för kontroll. Med `FOLKE_CHAT_MODELS` kan listan bara **begränsas**, inte utökas.
+- En ny modell kräver en kodändring i katalogen och en ny kontroll av pris och tillgänglighet. Det är avsiktligt, så att en modell inte kan aktiveras utan granskning.
+- Värden i databasen kontrolleras mot listan vid varje anrop. Okända värden ger standardmodellen.
+
+### Byta embeddingmodell eller textavsnitt
+
+- Embeddingmodellen anges med `FOLKE_EMBEDDING_MODEL` och måste finnas i katalogen. Kolumnen har 1536 dimensioner. En modell med annan dimension kräver en migration.
+- Vektorer jämförs bara med frågor gjorda med **samma** modell. Efter ett byte visar AI-sidan antalet avsnitt med "annan modell". Kör **Skapa embeddings** igen, och till dess faller sökningen tillbaka på fulltext.
+- Textavsnitt: 1 200 tecken med 200 tecken överlapp (`src/server/documents/chunk.ts`). Ändras storleken behöver dokumenten bearbetas och indexeras om.
+
+### Kostnad och gränser
+
+- **Administration → Användning och kostnad** visar kostnad i SEK och USD per assistent, användare och modell. Embeddings redovisas separat. Anrop utan slutlig tokenrapport, till exempel avbrutna svar, markeras som uppskattade.
+- Spärrar i servern, kontrollerade i databasen före varje anrop: budget per användare och dag, månadsbudget, antal samtidiga svar och antal frågor per minut (`FOLKE_AI_*` i `.env.example`).
+- Budgeten i OpenAI-projektet är ett extra skydd men **ingen garanterad hård gräns**. Kontrollera också användningen i OpenAI-dashboarden.
+
+### Testa
+
+```bash
+npm run check        # bland annat dataspärren, OpenAI-leverantören (fejkad klient) och källkontroll
+npm run test:db      # dataklasser, embeddings-spärr, hybridsökning och gränser i databasen (PGlite)
+npm run test:live    # samma spärrar mot utvecklingsprojektet (kräver FOLKE_ENVIRONMENT=development)
+npm run test:ai-eval # 21 svenska testfall × 2 modeller med riktiga anrop, ca 0,05 USD
+```
+
+### Verifierat i utvecklingsprojektet 2026-10-01
+
+Med syntetiska användare (`ui-ai…@folke.example`) och den syntetiska testsamlingen. Allt togs bort efteråt, och pilotprojektet användes inte. Livetester: 31/31. Webbläsartest: 51/51 kontroller.
+
+| Område | Verifierat |
+|---|---|
+| AI-sidan | Status utan nyckel, modellkontroll (luna, sol och embeddings tillgängliga), endast systemadministratör |
+| Testdata | Inläsning av 9 syntetiska dokument, embeddings för 12 avsnitt (bara syntetiska), embeddingkostnad registreras separat, borttagning via UI |
+| Testbehörighet | Ges och återkallas via UI och loggas. Efter återkallad behörighet blir det mockläge i befintlig syntetisk konversation och 403 för nya. |
+| Modellval | Rullista med kostnadsnivå. Bytet gäller nästa svar direkt. Ett ogodkänt värde i databasen (`gpt-6-astra`) ger standardmodellen. |
+| Chatt | Syntetiskt läge med varning, svar från gpt-6-luna med rätt fakta och källkort, följdfråga med historik, märkning efter omladdning, tokens och kostnad registrerade |
+| Hämtning | Semantisk fråga besvaras. Utgångna, ogranskade och andra assistenters dokument används inte. |
+| Injektion | Systemprompten avslöjas inte, och instruktioner i dokument följs inte |
+| Spärrar | Vanlig konversation (även med testbehörighet) använder mockläge utan OpenAI-kostnad. Användare utan behörighet nekas syntetiskt läge via API (403) och ser det inte i UI. |
+| Gränser | Avbrutet svar registreras som `aborted`. Samtidighetsgräns (2) och minutgräns (10) stoppar med svenska meddelanden. |
+| Kostnadsöversikt | Embeddings och USD separat, per modell |
+| Webb | Inga JavaScript- eller CSP-fel |
+
+### Byta till Börjessons företagsprojekt i OpenAI
+
+Byt `OPENAI_API_KEY` (och vid behov `OPENAI_PROJECT` och `OPENAI_ORGANIZATION`) i servermiljön. Kontrollera sedan modellerna på AI-sidan. Ingen kodändring behövs. Om projektet har godkänd EU-dataresidens sätts `OPENAI_BASE_URL=https://eu.api.openai.com/v1`, annars inte. Dataspärren gäller fortfarande. Att tillåta intern information är ett separat beslut (ADR-031).

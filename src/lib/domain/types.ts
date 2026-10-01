@@ -76,6 +76,8 @@ export interface Assistant {
   /** Knowledge collections the assistant may retrieve from. */
   collectionIds: ID[];
   suggestedPrompts: string[];
+  /** Chosen AI model (validated against the server's allowlist; null = default). */
+  aiModel: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,11 +175,15 @@ export interface Message {
   sources?: SourceReference[];
 }
 
+/** "synthetic" conversations may use an external AI provider (test data only). */
+export type ConversationDataClass = "internal" | "synthetic";
+
 export interface Conversation {
   id: ID;
   assistantId: ID;
   ownerId: ID;
   title: string;
+  dataClass: ConversationDataClass;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   messages: Message[];

@@ -1,27 +1,52 @@
 import "server-only";
 
+import { serverEnv } from "@/server/env";
+
+import { CHAT_MODELS, EMBEDDING_MODELS } from "./models";
+
 /**
- * Price list for cost tracking, in SEK per million tokens.
+ * Cost estimates from token counts and the model catalog's price list.
  *
- * Prices are configured here when a provider and model are approved and
- * reviewed regularly. Unknown models are recorded with cost 0 and a warning,
- * so usage is never lost even if the price list lags behind.
+ * Costs are estimates: OpenAI's invoice is authoritative, and the project
+ * budget in OpenAI is not a guaranteed hard limit either. Unknown models
+ * are recorded with cost 0 and a warning, so usage is never lost.
  */
-interface ModelPrice {
-  inputSekPerMTok: number;
-  outputSekPerMTok: number;
+
+export interface TokenUsage {
+  inputTokens: number;
+  cachedInputTokens?: number;
+  outputTokens: number;
 }
 
-const PRICES: Record<string, ModelPrice> = {
-  "mock:mock": { inputSekPerMTok: 0, outputSekPerMTok: 0 },
-};
-
-export function estimateCostSek(provider: string, model: string, inputTokens: number, outputTokens: number): number {
-  const price = PRICES[`${provider}:${model}`];
+export function chatCostUsd(model: string, usage: TokenUsage): number {
+  if (model === "mock") return 0;
+  const price = CHAT_MODELS.find((m) => m.id === model);
   if (!price) {
-    console.warn(`[pricing] no price configured for ${provider}:${model}`);
+    console.warn(`[pricing] no price configured for model ${model}`);
     return 0;
   }
-  const cost = (inputTokens * price.inputSekPerMTok + outputTokens * price.outputSekPerMTok) / 1_000_000;
-  return Math.round(cost * 10_000) / 10_000;
+  const cached = Math.min(usage.cachedInputTokens ?? 0, usage.inputTokens);
+  const cost =
+    (usage.inputTokens - cached) * price.inputUsdPerMTok +
+    cached * price.cachedInputUsdPerMTok +
+    usage.outputTokens * price.outputUsdPerMTok;
+  return round(cost / 1_000_000, 6);
+}
+
+export function embeddingCostUsd(model: string, tokens: number): number {
+  const price = EMBEDDING_MODELS.find((m) => m.id === model);
+  if (!price) {
+    console.warn(`[pricing] no price configured for embedding model ${model}`);
+    return 0;
+  }
+  return round((tokens * price.usdPerMTok) / 1_000_000, 6);
+}
+
+export function usdToSek(usd: number): number {
+  return round(usd * serverEnv().FOLKE_USD_TO_SEK, 4);
+}
+
+function round(value: number, decimals: number) {
+  const f = 10 ** decimals;
+  return Math.round(value * f) / f;
 }

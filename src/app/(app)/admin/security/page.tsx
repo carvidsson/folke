@@ -41,6 +41,11 @@ const ACTION_LABELS: Record<string, [string, StatusTone]> = {
   "document.processed": ["Dokument bearbetat", "neutral"],
   "document.downloaded": ["Dokument nedladdat", "neutral"],
   "chat.provider_error": ["Fel hos AI-leverantör", "danger"],
+  "ai.model_changed": ["AI-modell ändrad", "info"],
+  "ai.test_access_changed": ["AI-testbehörighet ändrad", "warning"],
+  "ai.synthetic_corpus_loaded": ["Syntetiska testdokument inlästa", "info"],
+  "ai.synthetic_corpus_removed": ["Syntetiska testdokument borttagna", "info"],
+  "ai.embeddings_indexed": ["Embeddings skapade (syntetiska)", "info"],
   "conversations.purge": ["Gallring av konversationer", "warning"],
 };
 

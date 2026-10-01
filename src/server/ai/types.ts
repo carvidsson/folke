@@ -3,10 +3,9 @@ import type { MessageRole } from "@/lib/domain/types";
 /**
  * Provider-neutral AI interface.
  *
- * No AI vendor is approved for company data yet. Everything above this
- * interface (route handler, persistence, retrieval, UI) is vendor-agnostic;
- * adding a vendor means adding one implementation in ./providers and
- * registering it in ./index.ts.
+ * Everything above this interface (route handler, persistence, retrieval,
+ * data guard, UI) is vendor-agnostic; adding a vendor means adding one
+ * implementation in ./providers and registering it in ./index.ts.
  */
 
 export interface ProviderMessage {
@@ -24,6 +23,8 @@ export interface ContextChunk {
   location: string | null;
   /** Passage around the matching terms (for display and the mock answer). */
   snippet?: string | null;
+  /** Data class of the source document (checked before external calls). */
+  dataClass?: "internal" | "synthetic" | "approved";
 }
 
 export interface ChatCompletionInput {
@@ -31,14 +32,36 @@ export interface ChatCompletionInput {
   system: string;
   messages: ProviderMessage[];
   context: ContextChunk[];
+  /** Model id from the catalog (ignored by the mock provider). */
+  model?: string;
+  /** Pseudonymous user reference for the vendor's abuse detection. */
+  safetyIdentifier?: string;
   signal?: AbortSignal;
+  /**
+   * Called exactly once when tokens were consumed – also after errors and
+   * aborts – so cost tracking never misses a call.
+   */
+  onUsage?: (usage: UsageReport) => void;
 }
 
-export type ProviderEvent =
-  | { type: "text"; delta: string }
-  | { type: "usage"; model: string; inputTokens: number; outputTokens: number };
+export interface UsageReport {
+  model: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  /** True when counts are estimated (mock, or a stream without final usage). */
+  estimated: boolean;
+}
+
+export interface ProviderEvent {
+  type: "text";
+  delta: string;
+}
 
 export interface AIProvider {
   readonly id: string;
+  /** True if calls leave Folke's infrastructure (subject to the data guard). */
+  readonly external: boolean;
   streamChat(input: ChatCompletionInput): AsyncIterable<ProviderEvent>;
 }

@@ -84,11 +84,15 @@ Inbjudan/återställning: e-postlänk ──► /auth/confirm (token_hash) ─�
 1. `getApiSession()` → 401 om ingen giltig session finns.
 2. Zod-validering. Klienten skickar **bara det nya meddelandet**, eftersom historiken läses från databasen.
 3. `getMyAssistant()` → 403 och en säkerhetshändelse om assistenten inte är tilldelad.
-4. Konversationen skapas eller hämtas (RLS: endast ägaren), och användarens meddelande sparas.
-5. **Retrieval:** `search_document_chunks` körs som användaren (SECURITY INVOKER). Svensk fulltextsökning ger bara godkända, giltiga och bearbetade dokument som delats med användarens grupper och som är kopplade till assistenten. Funktionen returnerar även ett frågestyrt utdrag (`ts_headline`), som visas i källkorten. Modellen får hela textbiten.
-6. Prompten byggs av assistentens instruktioner, som läses på servern och aldrig visas för användare. Till det kommer fasta regler och källor markerade som data, inte instruktioner.
-7. `AIProvider.streamChat()` strömmar text. Servern skickar NDJSON-händelserna `conversation`, `sources`, `text`, `done` och `error`.
-8. Svaret sparas tillsammans med källorna, även när användaren stoppar svaret. Förbrukningen skrivs till `ai_usage` med adminklienten, så att den inte kan förfalskas.
+4. Konversationen skapas eller hämtas (RLS: endast ägaren). En ny konversation får dataklassen `synthetic` bara om klienten begär det **och** användaren har AI-testbehörighet. Annars blir den `internal`.
+5. **Val av leverantör (dataspärren, `src/server/ai/guard.ts`):** OpenAI används bara för syntetiska konversationer av användare med AI-testbehörighet när `FOLKE_AI_PROVIDER=openai`. Allt annat besvaras av mock-providern. Modellen är assistentens val i databasen, kontrollerat mot modellkatalogen.
+6. För OpenAI kontrolleras gränserna atomiskt i databasen (`ai_begin_request`: budgetar, samtidighet och frågor per minut). Därefter sparas användarens meddelande.
+7. **Retrieval:** `search_document_chunks_hybrid` körs som användaren (SECURITY INVOKER, RLS). Svensk fulltext och, i syntetiska konversationer, vektorlikhet (pgvector, frågans embedding) slås ihop med reciprocal rank fusion. Syntetiska konversationer hämtar bara syntetiska dokument. Funktionen returnerar ett frågestyrt utdrag för källkorten. Modellen får hela textbiten.
+8. **Historik:** de senaste meddelandena inom en teckengräns. Tidigare svar som bygger på dokument som användaren inte längre kan läsa skickas inte med.
+9. Prompten byggs av assistentens instruktioner, som läses på servern och aldrig visas för användare. Till det kommer fasta regler, bland annat mot injektion i dokument och frågor, och källor markerade som data. **Slutkontrollen** `assertExternalAllowed` körs innan något skickas externt.
+10. `AIProvider.streamChat()` strömmar text. Servern skickar NDJSON-händelserna `conversation` (med leverantör och modell), `sources`, `text`, `done` (slutligt, kontrollerat svar med citerade källor) och `error`.
+11. **Källkontroll:** källnummer som inte motsvarar ett hämtat utdrag tas bort, och endast citerade utdrag sparas som källor. Svaret sparas även när användaren stoppar. Om leverantören fel tas frågan bort, så att ett nytt försök inte dubblerar historiken.
+12. Förbrukningen (tokens, cachade tokens och uppskattad kostnad i USD och SEK) skrivs till `ai_usage` med adminklienten, så att den inte kan förfalskas. Det görs även vid fel och avbrott, då markerat som uppskattat.
 
 ## Dokumentflödet
 
@@ -101,10 +105,19 @@ Inbjudan/återställning: e-postlänk ──► /auth/confirm (token_hash) ─�
 
 ## AI-abstraktion
 
-- `AIProvider.streamChat({ system, messages, context, signal })` ger en ström av `text`- och `usage`-händelser.
-- Providers registreras i `src/server/ai/index.ts` och väljs med `FOLKE_AI_PROVIDER`. Bara `mock` är registrerad.
-- **Mock-providern** svarar genom att citera de mest relevanta utdragen med korrekta `[n]`-hänvisningar. Hela kedjan (behörighet, sökning, källor, sparande och kostnad) kan därmed testas utan AI-leverantör och utan att någon data lämnar systemet.
-- Kostnad räknas i `pricing.ts` (kr per miljon tokens och modell). Okända modeller loggas med kostnaden 0 och en varning.
+| Modul (`src/server/ai/`) | Ansvar |
+|---|---|
+| `types.ts` | `AIProvider.streamChat({ system, messages, context, model, safetyIdentifier, signal, onUsage })` strömmar text. `onUsage` anropas exakt en gång när tokens förbrukats, även vid fel och avbrott. |
+| `index.ts` | Registret: `mock` och `openai`. Vilken som används avgörs av `guard.ts`, inte av klienten. |
+| `guard.ts` | Dataspärren: `chooseProviderId`, `retrievalDataClass`, `assertExternalAllowed` och `assertEmbeddable` |
+| `models.ts` | Central modellkatalog med pris, kostnadsnivå och `reasoning.effort`. Tillåtna modeller (`FOLKE_CHAT_MODELS` kan bara begränsa), standardmodell och embeddingmodell. |
+| `providers/openai.ts` | Officiell SDK, Responses API med strömning, `store: false`, inga omförsök och felmappning till svenska meddelanden. Embeddings och modellistning. |
+| `providers/mock.ts` | Citerar hämtade utdrag. Inga externa anrop. |
+| `limits.ts`, `usage.ts`, `pricing.ts` | Gränser och budgetstopp (databasfunktion), kostnadsloggning och kostnadsberäkning i USD (omräknad till SEK) |
+| `citations.ts`, `prompt.ts` | Källkontroll, systemprompt med regler och historikgräns |
+| `synthetic-corpus.ts`, `test-data.ts`, `embeddings.ts` | Syntetisk testsamling, inläsning, indexering och frågeembedding |
+
+Att byta leverantör innebär en ny modul i `providers/` och ett nytt kostnadsavsnitt i katalogen. Allt ovanför gränssnittet är leverantörsneutralt. Att byta OpenAI-projekt (till exempel till Börjessons företagsprojekt) kräver bara nya miljövariabler.
 
 ## Administration
 
@@ -116,7 +129,8 @@ Admin-sidorna anropar `requireSystemAdminPage()` eller `requireAdministrationAcc
 
 ## Drift
 
-- **Användning och kostnad:** aggregat per assistent, användare och modell. Konversationsinnehåll visas aldrig.
+- **AI och modeller** (`/admin/ai`, endast systemadministratör): leverantörsstatus utan hemligheter, kontroll av modeller, modell per assistent (rullista med kostnadsnivå), gränser, månadens kostnad, syntetiska testdata och AI-testbehörighet. Testverktygen finns bara när OpenAI är konfigurerat.
+- **Användning och kostnad:** aggregat per assistent, användare och modell, med embeddings separat och USD/SEK. Uppskattade värden markeras. Konversationsinnehåll visas aldrig.
 - **Säkerhetslogg:** `audit_log` med triggers för profiler, grupper, behörigheter och dokument, plus serverhändelser som inloggning, MFA, nekad åtkomst, inbjudningar och nedladdningar.
 - **Gallring:** administratörer ser bara antal konversationer per inaktivitetsintervall och kan ta bort konversationer som varit inaktiva i minst 12 månader. Gränsen upprätthålls i databasen, och åtgärden loggas.
 
@@ -127,6 +141,8 @@ Alla sidor bakom inloggning renderas dynamiskt (serverklienten läser cookies). 
 ## Driftsättning
 
 Förberett för Vercel: standardbuild och `maxDuration` 60 s för `/api/chat`. Miljövariablerna i `.env.example` sätts i Vercel. Ingen driftsättning är gjord.
+
+**Miljöer:** pilotprojektet (MVP 0.2, mockläge) och utvecklingsprojektet `folke-dev` (nya migrationer och AI-tester med syntetiska data). Se SETUP.md avsnitt 4.
 
 ## Livscykel och gallring
 

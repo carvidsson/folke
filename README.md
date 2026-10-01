@@ -3,6 +3,8 @@
 Intern AI-plattform för Börjessons. Medarbetare får tillgång till specialiserade AI-assistenter utifrån sina behörigheter.
 
 > **Status: MVP 0.2, verifierad mot den riktiga backenden 2026-10-01.** Riktig backend med Supabase (Stockholm), inloggning med lösenord och obligatorisk TOTP, användaradministration, dokumenthantering med granskning, sparade konversationer, kostnadsuppföljning och säkerhetslogg. **AI-svaren körs i mockläge** tills en AI-leverantör är godkänd. Använd endast syntetiska eller godkända interna dokument utan kunduppgifter.
+>
+> **MVP 0.3 (under utveckling):** OpenAI och hybridsökning (pgvector) för **syntetiska testdata** i ett separat utvecklingsprojekt, med modellval per assistent, budgetar och dataspärr. Se [SETUP.md avsnitt 10](docs/SETUP.md#10-ai-med-openai-endast-syntetiska-testdata).
 
 ## Assistenter
 
@@ -35,7 +37,8 @@ npm run bootstrap:admin -- fornamn.efternamn@exempel.se "Förnamn Efternamn"
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
 | `npm run test` | Alla tester (RLS och enhetstester) |
 | `npm run test:db` | Endast RLS-testerna (PGlite) |
-| `npm run test:live` | Säkerhetstester mot det riktiga Supabase-projektet (syntetiska användare, städar efter sig) |
+| `npm run test:live` | Säkerhetstester mot Supabase-projektet i `.env.local` (syntetiska användare, städar efter sig) |
+| `npm run test:ai-eval` | Svenska kvalitetstester med riktiga OpenAI-anrop, endast syntetiska data (några cent per körning) |
 | `npm run check` | Lint, typecheck och tester |
 | `npm run db:push` | Kör migrationerna mot det länkade Supabase-projektet |
 | `npm run bootstrap:admin` | Bjuder in den första systemadministratören |

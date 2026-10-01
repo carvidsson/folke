@@ -2,7 +2,7 @@
 
 # Folke – instruktioner för AI-assisterad utveckling
 
-Folke är Börjessons interna AI-plattform, nu i **MVP 0.2**: Supabase-backend (Stockholm), inloggning med TOTP, RLS och AI i mockläge. Läs `docs/ARCHITECTURE.md` och `docs/SECURITY.md` innan du gör strukturella ändringar.
+Folke är Börjessons interna AI-plattform, nu i **MVP 0.3**: Supabase-backend (Stockholm), inloggning med TOTP, RLS, AI i mockläge och OpenAI **endast för syntetiska testdata** (ADR-031). Läs `docs/ARCHITECTURE.md` och `docs/SECURITY.md` innan du gör strukturella ändringar.
 
 ## Kommandon
 
@@ -10,6 +10,8 @@ Folke är Börjessons interna AI-plattform, nu i **MVP 0.2**: Supabase-backend (
 npm run dev
 npm run check      # lint + typecheck + tester – ska passera innan du är klar
 npm run test:db    # RLS-tester (kör alltid efter ändringar i supabase/migrations)
+npm run test:live  # mot Supabase-projektet i .env.local – ska vara utvecklingsprojektet
+npm run test:ai-eval # riktiga OpenAI-anrop, syntetiska data, kostar några cent – kör bara vid behov
 npm run test:live  # säkerhetstester mot riktiga Supabase (efter migrationer och behörighetsändringar)
 npm run build      # ska passera innan du är klar
 ```
@@ -22,7 +24,8 @@ npm run build      # ska passera innan du är klar
 - **Server actions** validerar med Zod, kontrollerar rollen och returnerar `ActionResult`. Felmeddelanden till användaren är på svenska. Databasfel loggas på servern.
 - **`import "server-only"`** först i varje ny modul under `src/server` (utom `"use server"`-filer). Exportera bara async actions från `"use server"`-filer.
 - **Välj aldrig `instructions`** från `assistants` med användarklienten. Kolumnen är inte beviljad.
-- **Chatten:** klienten skickar bara nya meddelanden, och servern äger historiken. UI:t använder protokollet i `src/lib/chat/protocol.ts`. AI går via `getAIProvider()`.
+- **Chatten:** klienten skickar bara nya meddelanden, och servern äger historiken. UI:t använder protokollet i `src/lib/chat/protocol.ts`. Leverantören väljs **bara** av `chooseProviderId()` i `src/server/ai/guard.ts`, och `assertExternalAllowed()` körs före varje externt anrop.
+- **Extern AI:** skicka aldrig dokument eller konversationer med dataklassen `internal` till en extern leverantör, inte heller som embeddings. Lägg inte till vägar runt dataspärren, aktivera inte dataklassen `approved` och använd inte OpenAI:s vector stores, filer eller verktyg. Modeller läggs bara till i katalogen `src/server/ai/models.ts`, med kontrollerat pris och verifierad tillgänglighet.
 - **Next.js 16:** `params` och `searchParams` är promises, och middleware heter `proxy.ts`.
 
 ## Databasregler
@@ -44,7 +47,8 @@ npm run build      # ska passera innan du är klar
 
 - Bygg **aldrig** egen autentisering, lösenordshantering eller kryptografi. Använd Supabase Auth.
 - Inga hemligheter i koden. Nya miljövariabler dokumenteras i `.env.example` och `docs/SETUP.md`.
-- **Endast syntetisk testdata** (domänen `folke.example`, taggen `syntetisk`). Koppla inte in verkliga dokument eller en riktig AI-leverantör utan uttryckligt godkännande.
+- **Endast syntetisk testdata** (domänen `folke.example`, taggen `syntetisk`). Koppla inte in verkliga dokument utan uttryckligt godkännande. OpenAI-nyckeln finns bara i `.env.local` och får aldrig skrivas ut, loggas eller checkas in.
+- **Två Supabase-projekt:** nya migrationer och tester körs mot utvecklingsprojektet. Pilotprojektet (Christoffers konto, MFA, grupper och dokument) ändras inte utan uttryckligt godkännande.
 - Tester mot det riktiga projektet får aldrig ändra befintliga användare, grupper, dokument eller säkerhetsloggen. Allt som skapas ska städas bort, inklusive `ai_usage`. Mejl i tester går bara till `delivered@resend.dev`.
 - Inline-skript kräver CSP-nonce (`src/proxy.ts`). Sessionscookies är `httpOnly`. Använd inte Supabase Auth i webbläsaren.
 - Rendera aldrig modellutdata som rå HTML. Logga aldrig konversations- eller dokumentinnehåll.

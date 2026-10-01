@@ -3,7 +3,8 @@ import type { Metadata } from "next";
 import { AssistantsView, type AssistantRow } from "@/components/admin/assistants-view";
 import { assistantAccessSources } from "@/lib/domain/access";
 import { requireAdministrationAccess } from "@/server/auth/session";
-import { getAIProvider } from "@/server/ai";
+import { externalProviderConfigured } from "@/server/ai/guard";
+import { resolveChatModel } from "@/server/ai/models";
 import {
   getInstructionsForAdmin,
   listAssistantGrants,
@@ -30,13 +31,16 @@ export default async function AdminAssistantsPage() {
   const activeUsers = users.filter((u) => u.status !== "disabled");
 
   const instructions = await Promise.all(assistants.map((a) => getInstructionsForAdmin(a.id)));
-  const providerId = getAIProvider().id;
-  const providerLabel = providerId === "mock" ? "Mockläge – ingen AI-leverantör är godkänd ännu" : providerId;
+  const openAI = externalProviderConfigured();
+  const providerLabelFor = (aiModel: string | null) =>
+    openAI
+      ? `Mockläge för interna konversationer. OpenAI (${resolveChatModel(aiModel).label}) endast för syntetiska testkonversationer.`
+      : "Mockläge – ingen AI-leverantör är godkänd för intern information ännu";
 
   const rows: AssistantRow[] = assistants.map((assistant, i) => ({
     assistant,
     instructions: instructions[i],
-    providerLabel,
+    providerLabel: providerLabelFor(assistant.aiModel),
     managerNames: assistant.managerIds.map((id) => userName.get(id) ?? "Okänd"),
     collections: collections.filter((c) => assistant.collectionIds.includes(c.id)),
     documentCount: documents.filter((d) => d.assistantIds.includes(assistant.id)).length,
