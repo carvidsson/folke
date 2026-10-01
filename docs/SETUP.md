@@ -32,6 +32,12 @@ Gemensam referens för utvecklingsmiljön. Dokumentera **aldrig** nycklar, löse
 | Avsändare | `Folke <no-reply@heyfolke.se>` |
 | Webb | heyfolke.se pekar **inte** på någon publicerad app. `beta.heyfolke.se` är reserverad som möjlig testmiljö. |
 
+### Beta och driftsättning
+
+- `beta.heyfolke.se` hostas på **Vercel** (projektet `folke`, kopplat till GitHub `carvidsson/folke`).
+- **Production** i Vercel använder Supabase-projektet **folke**. Lokal utveckling använder **folke-dev**.
+- **Push till `main` är en release till betan.** Pusha bara efter uttryckligt godkännande.
+
 ### Lokalt
 
 `.env.local` finns med alla variabler (avsnitt 4). Node.js 24.
