@@ -83,6 +83,7 @@ export async function indexDocument(documentId: string, actorId: string): Promis
           model: model.id,
           tokens: result.tokens,
           dataClass: doc.ai_data_class === "synthetic" ? "synthetic" : "internal",
+          purpose: "indexing",
         });
         for (const [j, chunk] of batch.entries()) {
           const { error: updateError } = await admin

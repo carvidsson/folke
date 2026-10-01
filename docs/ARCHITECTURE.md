@@ -89,7 +89,7 @@ Inbjudan/återställning: e-postlänk ──► /auth/confirm (token_hash) ─�
 6. För OpenAI kontrolleras gränserna atomiskt i databasen (`ai_begin_request`: budgetar, samtidighet och frågor per minut). Därefter sparas användarens meddelande.
 7. **Retrieval:** `search_document_chunks_hybrid` körs som användaren (SECURITY INVOKER, RLS). Svensk fulltext och, i syntetiska konversationer, vektorlikhet (pgvector, frågans embedding) slås ihop med reciprocal rank fusion. Syntetiska konversationer hämtar bara syntetiska dokument. Funktionen returnerar ett frågestyrt utdrag för källkorten. Modellen får hela textbiten.
 8. **Historik:** de senaste meddelandena inom en teckengräns. Tidigare svar som bygger på dokument som användaren inte längre kan läsa skickas inte med.
-9. Prompten byggs av assistentens instruktioner, som läses på servern och aldrig visas för användare. Till det kommer fasta regler, bland annat mot injektion i dokument och frågor, och källor markerade som data. **Slutkontrollen** `assertExternalAllowed` körs innan något skickas externt.
+9. Prompten byggs i lager (ADR-037): gemensamma instruktioner, assistentens instruktioner (båda läses på servern och visas aldrig för användare), användarens egna önskemål om form och ton, och sist fasta regler. Till det kommer fasta regler, bland annat mot injektion i dokument och frågor, och källor markerade som data. **Slutkontrollen** `assertExternalAllowed` körs innan något skickas externt.
 10. `AIProvider.streamChat()` strömmar text. Servern skickar NDJSON-händelserna `conversation` (med leverantör och modell), `sources`, `text`, `done` (slutligt, kontrollerat svar med citerade källor) och `error`.
 11. **Källkontroll:** källnummer som inte motsvarar ett hämtat utdrag tas bort, och endast citerade utdrag sparas som källor. Svaret sparas även när användaren stoppar. Om leverantören fel tas frågan bort, så att ett nytt försök inte dubblerar historiken.
 12. Förbrukningen (tokens, cachade tokens och uppskattad kostnad i USD och SEK) skrivs till `ai_usage` med adminklienten, så att den inte kan förfalskas. Det görs även vid fel och avbrott, då markerat som uppskattat.
@@ -123,6 +123,8 @@ Godkännande för OpenAI (ADR-036): `setDocumentAIApprovalAction` anropar `set_d
 Att byta leverantör innebär en ny modul i `providers/` och ett nytt kostnadsavsnitt i katalogen. Allt ovanför gränssnittet är leverantörsneutralt. Att byta OpenAI-projekt (till exempel till Börjessons företagsprojekt) kräver bara nya miljövariabler.
 
 ## Administration
+
+**AI-instruktioner** (`/admin/instructions`): utkast och publicering (`save_instruction_draft`, `publish_instruction_draft` med optimistisk låsning), versionshistorik, förhandsgranskning och jämförelse med OpenAI (`src/server/ai/instruction-test.ts`: en hämtning, två anrop, ingen konversation, `ai_usage.purpose = instruction_test`). De fasta reglerna visas skrivskyddade. Promptens ordning är: gemensamma instruktioner → assistentens instruktioner → regler → användarens önskemål → källor → påminnelse om svarslängd.
 
 Admin-sidorna anropar `requireSystemAdminPage()` eller `requireAdministrationAccess()` i varje sida, och actions kontrollerar rollen igen. Alla ändringar skrivs med administratörens egen klient, så RLS och revisionstriggrarna gäller med rätt aktör. Undantag, som görs efter rollkontroll:
 

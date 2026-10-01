@@ -34,7 +34,8 @@ export type SecurityEvent =
   | "ai.synthetic_corpus_removed"
   | "ai.embeddings_indexed"
   | "ai.document_approved"
-  | "ai.document_revoked";
+  | "ai.document_revoked"
+  | "ai.instructions_changed";
 
 export async function logSecurityEvent(
   action: SecurityEvent,

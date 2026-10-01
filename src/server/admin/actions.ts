@@ -333,7 +333,6 @@ export async function removeGrantAction(grantId: string): Promise<ActionResult> 
 
 const assistantSchema = z.object({
   status: z.enum(["active", "draft", "paused"]),
-  instructions: z.string().trim().min(20).max(8000),
   suggestedPrompts: z.array(z.string().trim().min(1).max(200)).max(6),
 });
 
@@ -345,7 +344,7 @@ export async function saveAssistantAction(
   if (!roleHas(session.user.role, "assistants.configure")) return { ok: false, error: "Behörighet saknas." };
   const parsed = assistantSchema.safeParse(input);
   if (!uuid.safeParse(assistantId).success || !parsed.success) {
-    return { ok: false, error: "Instruktionerna måste vara mellan 20 och 8 000 tecken." };
+    return { ok: false, error: "Kontrollera status och förslag (högst sex, 200 tecken var)." };
   }
   const supabase = await createSupabaseServerClient();
   const { error, count } = await supabase
@@ -353,7 +352,6 @@ export async function saveAssistantAction(
     .update(
       {
         status: parsed.data.status,
-        instructions: parsed.data.instructions,
         suggested_prompts: parsed.data.suggestedPrompts,
       },
       { count: "exact" },

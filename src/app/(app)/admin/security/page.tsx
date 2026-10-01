@@ -48,6 +48,7 @@ const ACTION_LABELS: Record<string, [string, StatusTone]> = {
   "ai.embeddings_indexed": ["Embeddings skapade (syntetiska)", "info"],
   "ai.document_approved": ["Dokument godkänt för OpenAI", "warning"],
   "ai.document_revoked": ["Godkännande för OpenAI återkallat", "info"],
+  "ai.instructions_changed": ["AI-instruktioner ändrade", "info"],
   "conversations.purge": ["Gallring av konversationer", "warning"],
 };
 

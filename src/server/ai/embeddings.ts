@@ -2,7 +2,7 @@ import "server-only";
 
 import { embeddingModel } from "./models";
 import { createEmbeddings } from "./providers/openai";
-import { recordEmbeddingUsage } from "./usage";
+import { recordEmbeddingUsage, type UsagePurpose } from "./usage";
 
 /**
  * Query embedding for hybrid search. Call ONLY after the data guard allowed
@@ -11,7 +11,13 @@ import { recordEmbeddingUsage } from "./usage";
  */
 export async function embedQuery(
   text: string,
-  meta: { userId: string; assistantId: string; conversationId: string; dataClass: "internal" | "synthetic" },
+  meta: {
+    userId: string;
+    assistantId: string;
+    conversationId: string | null;
+    dataClass: "internal" | "synthetic";
+    purpose?: UsagePurpose;
+  },
   signal?: AbortSignal,
 ): Promise<{ vector: string; model: string } | null> {
   const model = embeddingModel();

@@ -285,3 +285,116 @@ describe.skipIf(!isDevelopmentProject)("Per-document approval for OpenAI (live, 
     expect(del.count).toBe(1);
   });
 });
+
+describe.skipIf(!isDevelopmentProject)("AI instructions and preferences (live, development project)", () => {
+  let admin: LiveUser, employee: LiveUser, other: LiveUser;
+
+  beforeAll(async () => {
+    admin = await createUser("instradmin", { role: "system_admin" });
+    employee = await createUser("instremployee");
+    other = await createUser("instrother");
+  });
+
+  afterAll(cleanup);
+
+  it("shared instructions are readable by administrators, not by employees", async () => {
+    const asAdmin = await admin.client.from("organization_instructions").select("content");
+    expect(asAdmin.data).toHaveLength(1);
+    const asEmployee = await employee.client.from("organization_instructions").select("content");
+    expect(asEmployee.data ?? []).toEqual([]);
+    const revisions = await employee.client.from("instruction_revisions").select("id");
+    expect(revisions.data ?? []).toEqual([]);
+  });
+
+  it("employees cannot change shared or assistant instructions (no-op, nothing written)", async () => {
+    const shared = await employee.client.from("organization_instructions").update({ content: "Kapat" }, { count: "exact" }).eq("id", true);
+    expect(shared.count ?? 0).toBe(0);
+    const assistant = await employee.client.from("assistants").update({ instructions: "Kapat kapat kapat kapat" }, { count: "exact" }).eq("slug", "salj");
+    expect(assistant.error !== null || (assistant.count ?? 0) === 0).toBe(true);
+    const revision = await admin.client.from("instruction_revisions").insert({ scope: "organization", content: "x" });
+    expect(revision.error).not.toBeNull();
+  });
+
+  it("personal preferences are private to the user", async () => {
+    const created = await employee.client
+      .from("user_ai_preferences")
+      .insert({ answer_length: "short", writing_options: ["no_emojis"] })
+      .select("user_id")
+      .single();
+    expect(created.data?.user_id).toBe(employee.id);
+    for (const viewer of [admin, other]) {
+      const { data } = await viewer.client.from("user_ai_preferences").select("user_id").eq("user_id", employee.id);
+      expect(data ?? []).toEqual([]);
+    }
+    const bad = await other.client.from("user_ai_preferences").insert({ user_id: employee.id });
+    expect(bad.error).not.toBeNull();
+  });
+});
+
+describe.skipIf(!isDevelopmentProject)("Instruction drafts (live, development project)", () => {
+  let adminA: LiveUser, adminB: LiveUser, employee: LiveUser;
+  let sales: string;
+
+  beforeAll(async () => {
+    sales = await assistantId("salj");
+    adminA = await createUser("draftadmina", { role: "system_admin" });
+    adminB = await createUser("draftadminb", { role: "system_admin" });
+    employee = await createUser("draftemployee");
+  });
+
+  afterAll(async () => {
+    // Drafts created here only (no publishing in the shared project).
+    await service().from("instruction_drafts").delete().in("updated_by", [adminA.id, adminB.id]);
+    await cleanup();
+  });
+
+  it("saving a draft leaves the published text unchanged, and employees cannot see it", async () => {
+    const { data: before } = await service().from("assistants").select("instructions").eq("id", sales).single();
+    const saved = await adminA.client.rpc("save_instruction_draft", {
+      p_scope: "assistant",
+      p_assistant_id: sales,
+      p_content: `${before!.instructions} Livetest-utkast.`,
+      p_expected_updated_at: null,
+    });
+    expect(saved.error).toBeNull();
+    const { data: after } = await service().from("assistants").select("instructions").eq("id", sales).single();
+    expect(after!.instructions).toBe(before!.instructions);
+    const peek = await employee.client.from("instruction_drafts").select("content");
+    expect(peek.data ?? []).toEqual([]);
+    const write = await employee.client.rpc("save_instruction_draft", {
+      p_scope: "assistant",
+      p_assistant_id: sales,
+      p_content: "Kapat utkast med tillräckligt lång text",
+      p_expected_updated_at: saved.data,
+    });
+    expect(write.error).not.toBeNull();
+  });
+
+  it("two administrators cannot silently overwrite each other's draft", async () => {
+    const { data: draft } = await adminA.client.from("instruction_drafts").select("updated_at").eq("target", sales).single();
+    const first = await adminB.client.rpc("save_instruction_draft", {
+      p_scope: "assistant",
+      p_assistant_id: sales,
+      p_content: "Administratör B:s ändring med tillräckligt lång text",
+      p_expected_updated_at: draft!.updated_at,
+    });
+    expect(first.error).toBeNull();
+    // Administrator A still holds the old version.
+    const stale = await adminA.client.rpc("save_instruction_draft", {
+      p_scope: "assistant",
+      p_assistant_id: sales,
+      p_content: "Administratör A:s ändring",
+      p_expected_updated_at: draft!.updated_at,
+    });
+    expect(stale.error?.code).toBe("PT409");
+    expect(stale.error?.message).toMatch(/ändrats av någon annan/);
+    const publishStale = await adminA.client.rpc("publish_instruction_draft", {
+      p_scope: "assistant",
+      p_assistant_id: sales,
+      p_expected_updated_at: draft!.updated_at,
+    });
+    expect(publishStale.error?.code).toBe("PT409");
+    const { data: kept } = await service().from("instruction_drafts").select("content").eq("target", sales).single();
+    expect(kept!.content).toBe("Administratör B:s ändring med tillräckligt lång text");
+  });
+});

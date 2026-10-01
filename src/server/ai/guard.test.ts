@@ -192,11 +192,12 @@ describe("cost estimates", () => {
 });
 
 describe("citation verification", () => {
-  it("keeps valid citations and lists them in order", () => {
+  it("keeps valid citations, lists them in order and renumbers them to match the stored sources", () => {
     const r = verifyCitations("Garantin är 3 år [2]. Laddkabeln 24 månader [1, 2].", 3);
     expect(r.cited).toEqual([2, 1]);
     expect(r.removed).toBe(0);
-    expect(r.content).toBe("Garantin är 3 år [2]. Laddkabeln 24 månader [1, 2].");
+    // Excerpt 2 is cited first, so it becomes source 1 in text and list.
+    expect(r.content).toBe("Garantin är 3 år [1]. Laddkabeln 24 månader [2, 1].");
   });
 
   it("removes invented source numbers", () => {
@@ -210,6 +211,13 @@ describe("citation verification", () => {
     const r = verifyCitations('Bromsbelägg omfattas inte [1, s. 4]. Kabeln 24 månader [2; avsnittet "Garanti"]. Fel [9, s. 1].', 2);
     expect(r.cited).toEqual([1, 2]);
     expect(r.content).toBe('Bromsbelägg omfattas inte [1, s. 4]. Kabeln 24 månader [2; avsnittet "Garanti"]. Fel.');
+  });
+
+  it("a single cited excerpt [3] becomes [1], like its source card", () => {
+    expect(verifyCitations("Enligt villkoren [3]. Och igen [3, s. 2].", 6)).toMatchObject({
+      content: "Enligt villkoren [1]. Och igen [1, s. 2].",
+      cited: [3],
+    });
   });
 
   it("removes all citations when nothing was retrieved", () => {
@@ -228,5 +236,25 @@ describe("history limits", () => {
 
   it("always keeps the latest message even if it is long", () => {
     expect(limitHistory([m("user", 50_000)])).toHaveLength(1);
+  });
+});
+
+describe("customer-ready texts", () => {
+  it("moves source markers out of the customer text into the staff section", () => {
+    const answer =
+      "Hej,\n\nKampanjen gäller Plus och Premium. [1]\nBas kostar 389 900 kr. [2]\n\nVänliga hälsningar\n\n**Underlag för medarbetaren**\n- Kampanjvillkor: [1]";
+    const r = verifyCitations(answer, 3);
+    const [customer, staff] = r.content.split("**Underlag för medarbetaren**");
+    expect(customer).not.toMatch(/\[\d/);
+    expect(customer).toContain("Kampanjen gäller Plus och Premium.");
+    expect(staff).toContain("Källor för uppgifterna i texten: [2]");
+    expect(staff).toContain("Kampanjvillkor: [1]");
+    expect(r.cited).toEqual([1, 2]);
+  });
+
+  it("leaves ordinary answers and clean customer texts unchanged", () => {
+    expect(verifyCitations("Priset är 512 300 kr [1].", 2).content).toBe("Priset är 512 300 kr [1].");
+    const clean = "Hej,\n\nTexten.\n\nUnderlag för medarbetaren\nKälla [1], s. 3.";
+    expect(verifyCitations(clean, 1).content).toBe(clean);
   });
 });

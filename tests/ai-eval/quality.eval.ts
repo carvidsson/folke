@@ -34,6 +34,15 @@ const MODELS = (process.env.FOLKE_EVAL_MODELS ?? "gpt-6-luna,gpt-6.1-sol").split
 const TODAY = new Date().toISOString().slice(0, 10);
 const CONTEXT_LIMIT = 6;
 
+/** Default shared organization instructions, from the migration that seeds them. */
+/** Current default shared instructions (set by 20261006090000_instruction_drafts.sql). */
+const ORGANIZATION = (() => {
+  const sql = readFileSync(join(process.cwd(), "supabase/migrations/20261006090000_instruction_drafts.sql"), "utf8");
+  const match = /update public\.organization_instructions\s+set content = '((?:[^']|'')*)'/.exec(sql);
+  if (!match) throw new Error("organization instructions not found");
+  return match[1].replace(/''/g, "'");
+})();
+
 /** Assistant instructions from the base-data migration (same text as in the database). */
 function loadInstructions(): Record<SyntheticAssistant, string> {
   const sql = readFileSync(join(process.cwd(), "supabase/migrations/20261001090400_base_data.sql"), "utf8");
@@ -158,7 +167,7 @@ describe("Swedish quality evaluation (real OpenAI, synthetic data)", () => {
         let error = "";
         try {
           for await (const e of openAIProvider.streamChat({
-            system: buildSystemPrompt(instructions[c.assistant], context),
+            system: buildSystemPrompt({ organization: ORGANIZATION, assistant: instructions[c.assistant] }, context),
             messages: [{ role: "user", content: c.question }],
             context,
             model: model.id,

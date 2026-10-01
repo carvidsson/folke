@@ -2,6 +2,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
+import { stripMathDelimiters } from "@/lib/chat/text";
 import { cn } from "@/lib/utils";
 
 /**
@@ -120,7 +121,7 @@ export function Markdown({
   return (
     <div className={cn("text-[0.9375rem] leading-7 break-words", className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
-        {linkCitations(children, idPrefix)}
+        {linkCitations(stripMathDelimiters(children), idPrefix)}
       </ReactMarkdown>
     </div>
   );

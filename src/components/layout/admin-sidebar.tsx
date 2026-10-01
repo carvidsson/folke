@@ -4,6 +4,7 @@ import {
   Bot,
   Gauge,
   KeyRound,
+  NotebookPen,
   ScrollText,
   Sparkles,
   Users,
@@ -44,6 +45,10 @@ export function AdminSidebar({ user }: { user: User }) {
           <SidebarNavLink href="/admin/assistants">
             <Bot />
             Assistenter
+          </SidebarNavLink>
+          <SidebarNavLink href="/admin/instructions">
+            <NotebookPen />
+            AI-instruktioner
           </SidebarNavLink>
           {isAdmin && (
             <SidebarNavLink href="/admin/permissions">

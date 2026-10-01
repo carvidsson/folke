@@ -1,6 +1,7 @@
 "use client";
 
 import { FolderOpen, Settings2, User, UsersRound } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
@@ -123,7 +124,6 @@ function AssistantConfig({ row, onSaved }: { row: AssistantRow; onSaved: () => v
   const { assistant: a } = row;
   const { pending, run } = useAdminAction();
   const [status, setStatus] = useState<AssistantStatus>(a.status);
-  const [instructions, setInstructions] = useState(row.instructions ?? "");
   const [prompts, setPrompts] = useState(a.suggestedPrompts.join(NEWLINE));
   const canEdit = row.instructions !== null;
 
@@ -164,17 +164,18 @@ function AssistantConfig({ row, onSaved }: { row: AssistantRow; onSaved: () => v
           </DetailSection>
           <DetailSection title="Systeminstruktioner">
             <Textarea
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
+              value={row.instructions ?? ""}
+              readOnly
               rows={9}
-              maxLength={8000}
-              disabled={!canEdit}
               aria-label="Systeminstruktioner"
               className="text-sm leading-6"
             />
             <p className="text-caption mt-2">
-              Används endast på servern och visas aldrig för användarna. Regler om källhänvisningar
-              och skydd mot instruktioner i dokument läggs alltid till automatiskt.
+              Publicerad version. Redigera, spara utkast och publicera under{" "}
+              <Link href="/admin/instructions" className="underline underline-offset-2">
+                AI-instruktioner
+              </Link>
+              . Visas aldrig för användarna.
             </p>
           </DetailSection>
           <DetailSection title="Förslag i tom chatt">
@@ -246,7 +247,6 @@ function AssistantConfig({ row, onSaved }: { row: AssistantRow; onSaved: () => v
                 () =>
                   saveAssistantAction(a.id, {
                     status,
-                    instructions,
                     suggestedPrompts: prompts
                       .split(NEWLINE)
                       .map((p) => p.trim())

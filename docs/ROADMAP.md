@@ -55,6 +55,38 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Chatthistorik: byt namn, radera en eller flera med bekräftelse | ✅ |
 | Pilotprojektet | Oförändrat (mockläge) |
 
+## AI-instruktioner (version 1) ✅ verifierat i folke-dev 2026-10-01
+
+| Del | Status |
+|---|---|
+| Gemensamma instruktioner, med den tidigare hårdkodade tonregeln som standard | ✅ |
+| Assistentspecifika instruktioner, versionshistorik och återställning | ✅ |
+| Förhandsgranskning av den sammansatta instruktionen | ✅ |
+| Fasta regler för källor och säkerhet visas skrivskyddade | ✅ |
+| Datamodell för personliga preferenser och koppling till prompten | ✅ Förberett (inga användare har preferenser ännu) |
+| Utkast och publicering med konfliktskydd, säker återställning | ✅ PGlite, live och webbläsare |
+| Jämförelse publicerat mot utkast med riktig OpenAI | ✅ Samma modell, fråga och underlag. Underlaget visas. |
+| Preferensernas effekt mätt med riktiga anrop | ✅ Utförligt mot kort: +85 % (sälj) och +31 % (garanti) i värsta fallet |
+| Källhänvisningar numreras om så att de matchar källkorten | ✅ |
+| Förtydligade fasta regler för källor och dokumentinnehåll (ADR-039) | ✅ Webbsökning är inte aktiverad |
+| Test av publicerade instruktioner med riktig OpenAI | ✅ Fakta, källor, säkerhet och struktur i alla körningar. Kvarstår några stilavvikelser (ADR-039). |
+| LaTeX-avgränsare i svar visas som vanlig text | ✅ |
+| Kundtexter utan källmarkörer, med "Underlag för medarbetaren" (ADR-040) | ✅ |
+| Justerade instruktioner för Sälj (vi-form, källor i kundtexter) och Analys (beräkningar, Förslag) | ✅ Publicerade via utkast |
+| **Version 1 av AI-instruktionssystemet** | ✅ Klar |
+
+## Senare
+
+- Kontrollerad webbsökning (de fasta reglerna är förberedda, men ingen sökning är byggd eller aktiverad).
+
+## Version 2 – exempelbaserad introduktion (planerad)
+
+- Tre steg med färdiga exempel: svarslängd, skrivstil och frivilliga tillval, plus frivillig fritext och egen exempeltext. Exemplen finns i `src/lib/onboarding/catalog.ts`, och inga AI-anrop krävs.
+- Varje steg och hela flödet kan hoppas över. Standardvärden gäller alltid.
+- Min profil → Mina AI-inställningar med förhandsgranskning.
+- Administratören väljer vid inbjudan om introduktionen erbjuds (`profiles.onboarding_offered`).
+- Valfri interaktiv guide: starta konversation, välja assistent, källhänvisningar och tidigare chattar.
+
 ## Senare
 
 - Godkännandeflöde för extern AI-behandling av interna dokument (förberett i schemat, ADR-031), när avtalen är klara.

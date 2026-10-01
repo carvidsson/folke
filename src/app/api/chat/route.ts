@@ -12,6 +12,7 @@ import {
 } from "@/server/ai/guard";
 import { beginAIRequest, finishAIRequest } from "@/server/ai/limits";
 import { resolveChatModel } from "@/server/ai/models";
+import { personalInstructions, personalReminder } from "@/server/ai/preferences";
 import { buildSystemPrompt, limitHistory, titleFromMessage } from "@/server/ai/prompt";
 import type { UsageReport } from "@/server/ai/types";
 import { recordChatUsage } from "@/server/ai/usage";
@@ -19,6 +20,7 @@ import { logSecurityEvent } from "@/server/audit";
 import { getApiSession } from "@/server/auth/session";
 import { citedSources, filterHistory, toContext, type HistoryRow, type SearchRow } from "@/server/chat/turn";
 import { getInstructionsForAuthorizedChat, getMyAssistant } from "@/server/data/assistants";
+import { getMyAIPreferences, getOrganizationInstructionsForChat } from "@/server/data/instructions";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
 /**
@@ -175,7 +177,12 @@ export async function POST(request: Request) {
   const history = limitHistory(filterHistory(rows, new Set(usable.map((d) => d.id))));
   const { context, sources } = toContext((chunkRows ?? []) as SearchRow[]);
 
-  const instructions = await getInstructionsForAuthorizedChat(assistant.id);
+  // Instruction layers: organization → assistant → the user's own preferences.
+  const [organizationInstructions, assistantInstructions, preferences] = await Promise.all([
+    getOrganizationInstructionsForChat(),
+    getInstructionsForAuthorizedChat(assistant.id),
+    getMyAIPreferences(userId),
+  ]);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -212,7 +219,15 @@ export async function POST(request: Request) {
           context,
         });
         for await (const event of provider.streamChat({
-          system: buildSystemPrompt(instructions, context),
+          system: buildSystemPrompt(
+            {
+              organization: organizationInstructions,
+              assistant: assistantInstructions,
+              personal: personalInstructions(preferences),
+              personalReminder: personalReminder(preferences),
+            },
+            context,
+          ),
           messages: history,
           context,
           model: model?.id,

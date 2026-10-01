@@ -244,6 +244,22 @@ Gäller utvecklingsprojektet med `FOLKE_AI_PROVIDER=openai` och `FOLKE_AI_EXTERN
 - Till OpenAI skickas assistentens instruktioner, regler, frågan, en begränsad historik och de hämtade utdragen med titel och sida. Inga namn, e-postadresser, användar-id eller andra interna metadata skickas.
 - Syntetiskt testläge (avsnitt 10) finns kvar för automatiserade tester och behövs inte för vanliga konversationer.
 
+### AI-instruktioner
+
+**Administration → AI-instruktioner.** Gemensamma instruktioner (systemadministratörer) och instruktioner per assistent (administratörer och assistentansvariga).
+
+1. Ändra texten och klicka **Spara utkast**. Utkastet gäller **inte** för användarna. Märkningen visar *Utkast, inte publicerat*.
+2. **Förhandsgranska** visar hela instruktionen, publicerad eller med utkast, med eller utan exempel på användarönskemål.
+3. **Testa med OpenAI** (per assistent): skriv en fråga och jämför ett svar med publicerade instruktioner mot ett svar med utkastet. Båda använder samma modell och samma hämtade dokumentutdrag, med dina behörigheter och bara godkända dokument. Underlaget visas. Svaren kan ändå variera mellan anrop. Inget sparas som konversation, men anropen räknas mot din AI-budget.
+4. **Publicera** gör utkastet aktivt för nya svar och sparar en version i **Historik**. **Kasta utkast** behåller den publicerade versionen.
+
+- **Samtidiga ändringar:** om någon annan har sparat eller publicerat under tiden visas *"har ändrats av någon annan"*, och ingenting skrivs över. Ladda om sidan.
+- **Återställa en version:** klicka **Använd** i historiken. Finns ett utkast måste du bekräfta. Texten laddas i redigeraren och sparas först när du klickar **Spara utkast**.
+- **Assistentvyn** (Administration → Assistenter) visar instruktionerna skrivskyddat.
+- De **fasta reglerna** om källor och säkerhet visas skrivskyddade.
+- **Kundtexter** (mejl, SMS) har inga källmarkörer i själva texten. Källor och kontrollpunkter visas efter texten under "Underlag för medarbetaren", och servern flyttar dit eventuella markörer som hamnat i kundtexten.
+- **Användarnas önskemål** (version 2) om längd, detaljnivå och ton går före allmänna stilanvisningar, men aldrig före uppdrag, obligatoriska format, regler, fakta, källkrav eller behörigheter. Undvik därför ord om svarslängd ("kortfattat", "utförligt") i assistentinstruktionerna, om de inte är ett obligatoriskt format.
+
 ### Chatthistorik
 
 - **Byt namn** och **Ta bort konversation** finns i menyn (⋯) i chattens huvud.
@@ -318,6 +334,8 @@ npm run check        # bland annat dataspärren, OpenAI-leverantören (fejkad kl
 npm run test:db      # dataklasser, embeddings-spärr, hybridsökning och gränser i databasen (PGlite)
 npm run test:live    # samma spärrar mot utvecklingsprojektet (kräver FOLKE_ENVIRONMENT=development)
 npm run test:ai-eval # 21 svenska testfall × 2 modeller med riktiga anrop, ca 0,05 USD
+# Publicerade instruktioner i folke-dev (läser instruktionerna, ändrar inget, bara godkända och syntetiska dokument):
+node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.eval.config.mts tests/ai-eval/published.eval.ts
 ```
 
 ### Verifierat i utvecklingsprojektet 2026-10-01
