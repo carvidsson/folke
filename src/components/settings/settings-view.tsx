@@ -1,27 +1,18 @@
 "use client";
 
-import { KeyRound, MonitorSmartphone, Smartphone } from "lucide-react";
-import { useId, useState } from "react";
+import { KeyRound, LogOut, MonitorSmartphone, Smartphone } from "lucide-react";
+import { useId, useTransition } from "react";
 import { toast } from "sonner";
 
-import { AssistantAvatar } from "@/components/common/assistant-avatar";
-import { PrototypeNotice } from "@/components/common/prototype-notice";
 import { StatusBadge } from "@/components/common/status-badge";
 import { UserAvatar } from "@/components/common/user-avatar";
 import { PageContainer, PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Assistant } from "@/lib/domain/types";
+import { formatDate, formatTime } from "@/lib/format";
+import { sendPasswordChangeLinkAction, updateProfileAction } from "@/server/account/actions";
 
 interface ProfileUser {
   name: string;
@@ -32,28 +23,28 @@ interface ProfileUser {
   roleLabel: string;
 }
 
-const savePrototype = () => toast("Prototyp: inställningarna sparas inte.");
+export interface SecurityInfo {
+  mfaEnrolledAt: string | null;
+  sessionStartedAt: string;
+  sessionExpiresAt: string;
+}
 
-export function SettingsView({ user, assistants }: { user: ProfileUser; assistants: Assistant[] }) {
+export function SettingsView({ user, security }: { user: ProfileUser; security: SecurityInfo }) {
   return (
     <PageContainer width="narrow">
-      <PageHeader title="Inställningar" description="Din profil, säkerhet och personliga preferenser." />
+      <PageHeader title="Inställningar" description="Din profil och dina säkerhetsinställningar." />
 
       <Tabs defaultValue="profile" className="mt-8 gap-6">
         <TabsList variant="line" className="w-full justify-start gap-4 border-b pb-0 [&>button]:flex-none [&>button]:px-0.5">
           <TabsTrigger value="profile">Profil</TabsTrigger>
           <TabsTrigger value="security">Säkerhet</TabsTrigger>
-          <TabsTrigger value="preferences">Preferenser</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile">
           <Profile user={user} />
         </TabsContent>
         <TabsContent value="security">
-          <Security />
-        </TabsContent>
-        <TabsContent value="preferences">
-          <Preferences assistants={assistants} />
+          <Security info={security} />
         </TabsContent>
       </Tabs>
     </PageContainer>
@@ -109,37 +100,60 @@ function Field({
 
 function Profile({ user }: { user: ProfileUser }) {
   const id = useId();
+  const [pending, startTransition] = useTransition();
+
   return (
-    <SettingsCard
-      title="Profil"
-      description="Uppgifterna används för att anpassa assistenternas svar, t.ex. i signaturer."
-      footer={<Button onClick={savePrototype}>Spara</Button>}
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        const form = new FormData(e.currentTarget);
+        startTransition(async () => {
+          const result = await updateProfileAction({
+            fullName: String(form.get("fullName") ?? ""),
+            title: String(form.get("title") ?? ""),
+            department: String(form.get("department") ?? ""),
+            location: String(form.get("location") ?? ""),
+          });
+          if (result.ok) toast.success(result.message);
+          else toast.error(result.error);
+        });
+      }}
     >
-      <div className="mb-6 flex items-center gap-4">
-        <UserAvatar name={user.name} size="lg" />
-        <div>
-          <p className="font-medium">{user.name}</p>
-          <p className="text-sm text-muted-foreground">{user.roleLabel}</p>
+      <SettingsCard
+        title="Profil"
+        description="Namn och titel visas för kollegor, till exempel i grupper och dokument."
+        footer={
+          <Button type="submit" disabled={pending}>
+            Spara
+          </Button>
+        }
+      >
+        <div className="mb-6 flex items-center gap-4">
+          <UserAvatar name={user.name} size="lg" />
+          <div>
+            <p className="font-medium">{user.name}</p>
+            <p className="text-sm text-muted-foreground">{user.roleLabel}</p>
+          </div>
         </div>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Namn" htmlFor={`${id}-name`}>
-          <Input id={`${id}-name`} defaultValue={user.name} className="h-9" />
-        </Field>
-        <Field label="E-postadress" htmlFor={`${id}-email`} hint="Ändras av en systemadministratör.">
-          <Input id={`${id}-email`} defaultValue={user.email} disabled className="h-9" />
-        </Field>
-        <Field label="Titel" htmlFor={`${id}-title`}>
-          <Input id={`${id}-title`} defaultValue={user.title} className="h-9" />
-        </Field>
-        <Field label="Avdelning" htmlFor={`${id}-department`}>
-          <Input id={`${id}-department`} defaultValue={user.department} className="h-9" />
-        </Field>
-        <Field label="Anläggning" htmlFor={`${id}-location`}>
-          <Input id={`${id}-location`} defaultValue={user.location} className="h-9" />
-        </Field>
-      </div>
-    </SettingsCard>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Namn" htmlFor={`${id}-name`}>
+            <Input id={`${id}-name`} name="fullName" defaultValue={user.name} required minLength={2} maxLength={120} className="h-9" />
+          </Field>
+          <Field label="E-postadress" htmlFor={`${id}-email`} hint="Ändras av en systemadministratör.">
+            <Input id={`${id}-email`} defaultValue={user.email} disabled className="h-9" />
+          </Field>
+          <Field label="Titel" htmlFor={`${id}-title`}>
+            <Input id={`${id}-title`} name="title" defaultValue={user.title} maxLength={120} className="h-9" />
+          </Field>
+          <Field label="Avdelning" htmlFor={`${id}-department`}>
+            <Input id={`${id}-department`} name="department" defaultValue={user.department} maxLength={120} className="h-9" />
+          </Field>
+          <Field label="Anläggning" htmlFor={`${id}-location`}>
+            <Input id={`${id}-location`} name="location" defaultValue={user.location} maxLength={120} className="h-9" />
+          </Field>
+        </div>
+      </SettingsCard>
+    </form>
   );
 }
 
@@ -151,7 +165,7 @@ function SecurityRow({
 }: {
   icon: typeof KeyRound;
   title: string;
-  description: string;
+  description: React.ReactNode;
   action: React.ReactNode;
 }) {
   return (
@@ -168,107 +182,57 @@ function SecurityRow({
   );
 }
 
-function Security() {
-  const planned = <StatusBadge tone="neutral">Planerad</StatusBadge>;
-  return (
-    <div className="flex flex-col gap-4">
-      <PrototypeNotice>
-        Inloggning och säkerhetsinställningar är inte införda ännu. Nedan visas hur de kommer att
-        fungera – ingenting här är aktivt.
-      </PrototypeNotice>
-      <SettingsCard title="Inloggning och säkerhet">
-        <div className="divide-y">
-          <SecurityRow
-            icon={KeyRound}
-            title="Lösenord"
-            description="Byt lösenord. Minst 12 tecken krävs."
-            action={planned}
-          />
-          <SecurityRow
-            icon={Smartphone}
-            title="Tvåstegsverifiering (TOTP)"
-            description="Obligatorisk för alla användare. Konfigureras med en autentiseringsapp vid första inloggningen."
-            action={planned}
-          />
-          <SecurityRow
-            icon={MonitorSmartphone}
-            title="Aktiva sessioner"
-            description="Se var du är inloggad och logga ut andra enheter."
-            action={planned}
-          />
-        </div>
-      </SettingsCard>
-    </div>
-  );
-}
-
-function Preferences({ assistants }: { assistants: Assistant[] }) {
-  const id = useId();
-  const [defaultAssistant, setDefaultAssistant] = useState(assistants[0]?.id ?? "");
-  const [enterToSend, setEnterToSend] = useState(true);
-  const [showSources, setShowSources] = useState(true);
+function Security({ info }: { info: SecurityInfo }) {
+  const [pending, startTransition] = useTransition();
+  const stamp = (iso: string) => `${formatDate(iso)} ${formatTime(iso)}`;
 
   return (
-    <SettingsCard
-      title="Preferenser"
-      description="Anpassa hur Folke fungerar för dig."
-      footer={<Button onClick={savePrototype}>Spara</Button>}
-    >
-      <div className="flex flex-col gap-6">
-        <Field label="Standardassistent" htmlFor={`${id}-assistant`} hint="Förvald när du startar en ny chatt.">
-          <Select value={defaultAssistant} onValueChange={setDefaultAssistant}>
-            <SelectTrigger id={`${id}-assistant`} className="h-9 w-full sm:w-72 data-[size=default]:h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {assistants.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  <AssistantAvatar assistant={a} size="xs" />
-                  {a.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <ToggleRow
-          id={`${id}-enter`}
-          label="Skicka med Enter"
-          description="Använd Skift + Enter för ny rad."
-          checked={enterToSend}
-          onCheckedChange={setEnterToSend}
+    <SettingsCard title="Inloggning och säkerhet">
+      <div className="divide-y">
+        <SecurityRow
+          icon={Smartphone}
+          title="Tvåstegsverifiering (TOTP)"
+          description={
+            info.mfaEnrolledAt
+              ? `Aktiverad ${formatDate(info.mfaEnrolledAt)}. Obligatorisk för alla användare. Kontakta en systemadministratör om du byter telefon.`
+              : "Obligatorisk för alla användare."
+          }
+          action={<StatusBadge tone="success">Aktiv</StatusBadge>}
         />
-        <ToggleRow
-          id={`${id}-sources`}
-          label="Visa källhänvisningar"
-          description="Visa vilka dokument ett svar bygger på."
-          checked={showSources}
-          onCheckedChange={setShowSources}
+        <SecurityRow
+          icon={KeyRound}
+          title="Lösenord"
+          description="Du får en länk via e-post för att välja ett nytt lösenord."
+          action={
+            <Button
+              variant="outline"
+              disabled={pending}
+              onClick={() =>
+                startTransition(async () => {
+                  const result = await sendPasswordChangeLinkAction();
+                  if (result.ok) toast.success(result.message);
+                  else toast.error(result.error);
+                })
+              }
+            >
+              Byt lösenord
+            </Button>
+          }
+        />
+        <SecurityRow
+          icon={MonitorSmartphone}
+          title="Aktuell session"
+          description={`Inloggad ${stamp(info.sessionStartedAt)}. Du loggas ut automatiskt senast ${stamp(info.sessionExpiresAt)}.`}
+          action={
+            <form action="/auth/signout?scope=global" method="post">
+              <Button type="submit" variant="outline">
+                <LogOut />
+                Logga ut överallt
+              </Button>
+            </form>
+          }
         />
       </div>
     </SettingsCard>
-  );
-}
-
-function ToggleRow({
-  id,
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  id: string;
-  label: string;
-  description: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-6">
-      <div>
-        <Label htmlFor={id}>{label}</Label>
-        <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
-      </div>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
-    </div>
   );
 }

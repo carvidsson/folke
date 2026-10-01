@@ -1,6 +1,6 @@
 import { StatusBadge, type StatusTone } from "@/components/common/status-badge";
-import { PROCESSING_LABELS, VALIDITY_LABELS } from "@/lib/domain/labels";
-import type { DocumentProcessingState, DocumentValidity } from "@/lib/domain/types";
+import { PROCESSING_LABELS, REVIEW_LABELS, VALIDITY_LABELS } from "@/lib/domain/labels";
+import type { DocumentProcessingState, DocumentReviewStatus, DocumentValidity } from "@/lib/domain/types";
 
 const VALIDITY_TONES: Record<DocumentValidity, StatusTone> = {
   valid: "success",
@@ -10,6 +10,7 @@ const VALIDITY_TONES: Record<DocumentValidity, StatusTone> = {
 };
 
 const PROCESSING_TONES: Record<DocumentProcessingState, StatusTone> = {
+  queued: "info",
   ready: "neutral",
   processing: "info",
   failed: "danger",
@@ -31,4 +32,15 @@ export function ValidityBadge({
 
 export function ProcessingBadge({ state }: { state: DocumentProcessingState }) {
   return <StatusBadge tone={PROCESSING_TONES[state]}>{PROCESSING_LABELS[state]}</StatusBadge>;
+}
+
+const REVIEW_TONES: Record<DocumentReviewStatus, StatusTone> = {
+  pending: "warning",
+  approved: "success",
+  rejected: "danger",
+  archived: "neutral",
+};
+
+export function ReviewBadge({ status }: { status: DocumentReviewStatus }) {
+  return <StatusBadge tone={REVIEW_TONES[status]}>{REVIEW_LABELS[status]}</StatusBadge>;
 }

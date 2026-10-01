@@ -1,15 +1,20 @@
 "use client";
 
-import { Check, Info, Minus, User } from "lucide-react";
+import { Check, Info, Minus, Plus, User, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { Panel } from "@/components/common/panel";
-import { PrototypeNotice } from "@/components/common/prototype-notice";
 import { PageContainer, PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -24,6 +29,9 @@ import { ROLE_CAPABILITIES } from "@/lib/domain/roles";
 import type { Assistant, Role } from "@/lib/domain/types";
 import { cn } from "@/lib/utils";
 
+import { addUserGrantAction, removeGrantAction, saveGroupGrantsAction } from "@/server/admin/actions";
+
+import { useAdminAction } from "./use-admin-action";
 import { RoleBadge } from "./users-view";
 
 export interface PermissionsData {
@@ -32,6 +40,7 @@ export interface PermissionsData {
   /** groupId -> assistantIds */
   groupGrants: Record<string, string[]>;
   directGrants: { id: string; userName: string; assistantId: string }[];
+  users: { id: string; name: string }[];
   collections: { id: string; name: string }[];
   /** groupId -> collectionId -> coverage */
   documentCoverage: Record<string, Record<string, { visible: number; total: number }>>;
@@ -47,6 +56,9 @@ function toSet(grants: Record<string, string[]>) {
 export function PermissionsView({ data }: { data: PermissionsData }) {
   const initial = useMemo(() => toSet(data.groupGrants), [data.groupGrants]);
   const [grants, setGrants] = useState(initial);
+  const [grantUser, setGrantUser] = useState("");
+  const [grantAssistant, setGrantAssistant] = useState("");
+  const { pending, run } = useAdminAction();
 
   const changes = useMemo(
     () => [...grants].filter((k) => !initial.has(k)).length + [...initial].filter((k) => !grants.has(k)).length,
@@ -141,13 +153,27 @@ export function PermissionsView({ data }: { data: PermissionsData }) {
             <div className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm sm:flex-row sm:items-center">
               <p className="flex-1 text-sm">
                 <span className="font-medium">{changes} osparade ändringar.</span>{" "}
-                <span className="text-muted-foreground">Ändringarna sparas inte i prototypen.</span>
+                <span className="text-muted-foreground">Ändringarna gäller direkt när du sparar.</span>
               </p>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setGrants(initial)}>
+                <Button variant="outline" onClick={() => setGrants(initial)} disabled={pending}>
                   Återställ
                 </Button>
-                <Button onClick={() => toast("Prototyp: behörigheterna har inte sparats.")}>
+                <Button
+                  disabled={pending}
+                  onClick={() =>
+                    run(() =>
+                      saveGroupGrantsAction(
+                        [...new Set([...grants, ...initial])]
+                          .filter((k) => grants.has(k) !== initial.has(k))
+                          .map((k) => {
+                            const [groupId, assistantId] = k.split(":");
+                            return { groupId, assistantId, granted: grants.has(k) };
+                          }),
+                      ),
+                    )
+                  }
+                >
                   Spara ändringar
                 </Button>
               </div>
@@ -161,7 +187,7 @@ export function PermissionsView({ data }: { data: PermissionsData }) {
                 {data.directGrants.map((d) => {
                   const a = assistantById.get(d.assistantId);
                   return (
-                    <li key={d.id} className="flex items-center gap-3 px-4 py-3 text-sm">
+                    <li key={d.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
                       <User className="size-4 text-muted-foreground" />
                       <span className="flex-1 font-medium">{d.userName}</span>
                       {a && (
@@ -170,9 +196,61 @@ export function PermissionsView({ data }: { data: PermissionsData }) {
                           {a.name}
                         </span>
                       )}
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={pending}
+                        aria-label={`Ta bort ${a?.name ?? "assistenten"} för ${d.userName}`}
+                        onClick={() => run(() => removeGrantAction(d.id))}
+                      >
+                        <X />
+                      </Button>
                     </li>
                   );
                 })}
+                <li className="flex flex-col gap-2 bg-surface px-4 py-3 sm:flex-row sm:items-center">
+                  <Select value={grantUser} onValueChange={setGrantUser}>
+                    <SelectTrigger aria-label="Användare" className="h-9 bg-background sm:w-64 data-[size=default]:h-9">
+                      <SelectValue placeholder="Välj användare" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {data.users.map((u) => (
+                        <SelectItem key={u.id} value={u.id}>
+                          {u.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={grantAssistant} onValueChange={setGrantAssistant}>
+                    <SelectTrigger aria-label="Assistent" className="h-9 bg-background sm:w-56 data-[size=default]:h-9">
+                      <SelectValue placeholder="Välj assistent" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {data.assistants.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    className="bg-background"
+                    disabled={pending || !grantUser || !grantAssistant}
+                    onClick={() =>
+                      run(
+                        () => addUserGrantAction(grantUser, grantAssistant),
+                        () => {
+                          setGrantUser("");
+                          setGrantAssistant("");
+                        },
+                      )
+                    }
+                  >
+                    <Plus />
+                    Lägg till
+                  </Button>
+                </li>
               </ul>
             </Panel>
           </section>
@@ -251,10 +329,10 @@ export function PermissionsView({ data }: { data: PermissionsData }) {
               </article>
             ))}
           </div>
-          <PrototypeNotice className="mt-4">
-            Rollerna beskriver planerad policy. Behörighetskontroll införs på servern och i
-            databasen i nästa etapp.
-          </PrototypeNotice>
+          <p className="text-caption mt-4">
+            Rollerna styr administration. Behörigheterna kontrolleras på servern och i databasen
+            (Row Level Security) vid varje anrop.
+          </p>
         </TabsContent>
       </Tabs>
     </PageContainer>

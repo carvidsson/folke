@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 
 import { KnowledgeView } from "@/components/knowledge/knowledge-view";
-import { roleHas } from "@/lib/domain/roles";
 import { getSession } from "@/server/auth/session";
 import { listAssistants, listCollections } from "@/server/data/assistants";
 import { listDocuments } from "@/server/data/documents";
@@ -19,13 +18,29 @@ export default async function KnowledgePage({ searchParams }: PageProps<"/knowle
     searchParams,
   ]);
 
+  const isAdmin = user.role === "system_admin";
+  const managed = groups.filter((g) => g.managerIds.includes(user.id));
+  const memberOf = groups.filter((g) => !g.system && g.memberIds.includes(user.id));
+  const option = ({ id, name, system }: (typeof groups)[number]) => ({ id, name, system });
+
+  // Mirrors the database rules (app.can_upload_documents and the insert
+  // policy on documents); the database remains the authority.
+  const canUpload = isAdmin || user.role === "assistant_manager" || managed.length > 0;
+  const ownerGroups = (isAdmin ? groups : memberOf).map(option);
+  const shareGroups = (isAdmin ? groups : memberOf).map(option);
+
   return (
     <KnowledgeView
       documents={documents}
       collections={collections}
       assistants={assistants}
-      groups={groups.map(({ id, name }) => ({ id, name }))}
-      canUpload={roleHas(user.role, "knowledge.upload")}
+      groups={groups.map(option)}
+      ownerGroups={ownerGroups}
+      shareGroups={shareGroups}
+      canUpload={canUpload && ownerGroups.length > 0}
+      reviewableGroupIds={managed.map((g) => g.id)}
+      isAdmin={isAdmin}
+      currentUserId={user.id}
       initialDocumentId={typeof document === "string" ? document : null}
     />
   );

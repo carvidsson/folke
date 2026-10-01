@@ -7,7 +7,7 @@ import { UserAvatar } from "@/components/common/user-avatar";
 import { PageContainer, PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { documentVisibleToGroup } from "@/lib/domain/access";
-import { requireAdministrationAccess } from "@/server/auth/session";
+import { requireSystemAdminPage } from "@/server/auth/session";
 import { listAssistantGrants, listAssistants } from "@/server/data/assistants";
 import { listDocuments } from "@/server/data/documents";
 import { listGroups, listUsers } from "@/server/data/users";
@@ -15,7 +15,7 @@ import { listGroups, listUsers } from "@/server/data/users";
 export const metadata: Metadata = { title: "Grupper" };
 
 export default async function AdminGroupsPage() {
-  await requireAdministrationAccess();
+  await requireSystemAdminPage();
   const [groups, users, assistants, grants, documents] = await Promise.all([
     listGroups(),
     listUsers(),
@@ -24,6 +24,10 @@ export default async function AdminGroupsPage() {
     listDocuments(),
   ]);
   const userById = new Map(users.map((u) => [u.id, u]));
+  const systemGroupIds = groups.filter((g) => g.system).map((g) => g.id);
+  const userOptions = users
+    .filter((u) => u.status !== "disabled")
+    .map(({ id, name, email }) => ({ id, name, email }));
 
   return (
     <PageContainer width="wide">
@@ -41,7 +45,7 @@ export default async function AdminGroupsPage() {
               (g) => g.assistantId === a.id && g.subject.type === "group" && g.subject.groupId === group.id,
             ),
           );
-          const docCount = documents.filter((d) => documentVisibleToGroup(d, group.id, grants)).length;
+          const docCount = documents.filter((d) => documentVisibleToGroup(d, group, systemGroupIds)).length;
 
           return (
             <article key={group.id} className="flex flex-col rounded-xl border bg-card p-5 shadow-xs">
@@ -59,9 +63,31 @@ export default async function AdminGroupsPage() {
                     )}
                   </div>
                 </div>
-                <GroupMenu name={group.name} editable={!group.system} />
+                <GroupMenu
+                  users={userOptions}
+                  group={{
+                    id: group.id,
+                    name: group.name,
+                    description: group.description,
+                    system: Boolean(group.system),
+                    members: group.system
+                      ? []
+                      : group.memberIds.map((userId) => ({
+                          userId,
+                          isManager: group.managerIds.includes(userId),
+                        })),
+                  }}
+                />
               </div>
               <p className="mt-3 text-sm text-muted-foreground">{group.description}</p>
+              {group.managerIds.length > 0 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Ansvariga:{" "}
+                  <span className="text-foreground">
+                    {group.managerIds.map((id) => userById.get(id)?.name).filter(Boolean).join(", ")}
+                  </span>
+                </p>
+              )}
 
               <dl className="mt-5 grid grid-cols-3 gap-3 border-t pt-4 text-sm">
                 <div>

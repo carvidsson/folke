@@ -1,12 +1,12 @@
-import type { ChatStreamEvent } from "@/lib/chat/protocol";
-import type { Assistant, MessageRole } from "@/lib/domain/types";
+import type { MessageRole } from "@/lib/domain/types";
 
 /**
  * Provider-neutral AI interface.
  *
- * Folke has not chosen an AI vendor yet. Everything above this interface
- * (route handlers, UI) is vendor-agnostic; adding a vendor means adding one
- * implementation in ./providers and registering it in ./index.ts.
+ * No AI vendor is approved for company data yet. Everything above this
+ * interface (route handler, persistence, retrieval, UI) is vendor-agnostic;
+ * adding a vendor means adding one implementation in ./providers and
+ * registering it in ./index.ts.
  */
 
 export interface ProviderMessage {
@@ -14,25 +14,31 @@ export interface ProviderMessage {
   content: string;
 }
 
+/** A retrieved document excerpt the model may cite as [index]. */
+export interface ContextChunk {
+  index: number;
+  documentId: string;
+  title: string;
+  /** Full chunk text – what a model receives as context. */
+  content: string;
+  location: string | null;
+  /** Passage around the matching terms (for display and the mock answer). */
+  snippet?: string | null;
+}
+
 export interface ChatCompletionInput {
-  assistant: Assistant;
+  /** Complete system prompt (assistant instructions + rules + context). */
+  system: string;
   messages: ProviderMessage[];
-  /**
-   * Retrieved context the model may cite. Empty until retrieval (RAG) is
-   * built; retrieval must filter by the user's document access first.
-   */
-  context: RetrievedChunk[];
+  context: ContextChunk[];
   signal?: AbortSignal;
 }
 
-export interface RetrievedChunk {
-  documentId: string;
-  title: string;
-  text: string;
-  location: string | null;
-}
+export type ProviderEvent =
+  | { type: "text"; delta: string }
+  | { type: "usage"; model: string; inputTokens: number; outputTokens: number };
 
 export interface AIProvider {
   readonly id: string;
-  streamChat(input: ChatCompletionInput): AsyncIterable<ChatStreamEvent>;
+  streamChat(input: ChatCompletionInput): AsyncIterable<ProviderEvent>;
 }

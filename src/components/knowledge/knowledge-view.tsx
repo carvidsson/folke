@@ -1,6 +1,6 @@
 "use client";
 
-import { SearchX, Upload } from "lucide-react";
+import { FileText, SearchX, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
@@ -25,7 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { VALIDITY_LABELS, visibilityLabel } from "@/lib/domain/labels";
+import { REVIEW_LABELS, VALIDITY_LABELS, sharingLabel } from "@/lib/domain/labels";
 import type {
   Assistant,
   DocumentValidity,
@@ -35,32 +35,44 @@ import type {
 import { formatCalendarDate, formatShortDate } from "@/lib/format";
 import type { KnowledgeDocumentView } from "@/server/data/documents";
 
-import { ProcessingBadge, ValidityBadge } from "./document-badges";
+import { ProcessingBadge, ReviewBadge, ValidityBadge } from "./document-badges";
 import { DocumentIcon } from "./document-icon";
 import { DocumentSheet } from "./document-sheet";
 import { UploadDialog } from "./upload-dialog";
 
-export type GroupOption = Pick<UserGroup, "id" | "name">;
+export type GroupOption = Pick<UserGroup, "id" | "name" | "system">;
 
 export function KnowledgeView({
   documents,
   collections,
   assistants,
   groups,
+  ownerGroups,
+  shareGroups,
   canUpload,
+  reviewableGroupIds,
+  isAdmin,
+  currentUserId,
   initialDocumentId,
 }: {
   documents: KnowledgeDocumentView[];
   collections: KnowledgeCollection[];
   assistants: Assistant[];
   groups: GroupOption[];
+  ownerGroups: GroupOption[];
+  shareGroups: GroupOption[];
   canUpload: boolean;
+  /** Groups whose documents the user reviews (managers). */
+  reviewableGroupIds: string[];
+  isAdmin: boolean;
+  currentUserId: string;
   initialDocumentId: string | null;
 }) {
   const [query, setQuery] = useState("");
   const [collection, setCollection] = useState(ALL);
   const [assistant, setAssistant] = useState(ALL);
   const [validity, setValidity] = useState(ALL);
+  const [review, setReview] = useState(ALL);
   const [openId, setOpenId] = useState<string | null>(initialDocumentId);
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -77,38 +89,44 @@ export function KnowledgeView({
         (collection === ALL || d.collectionId === collection) &&
         (assistant === ALL || d.assistantIds.includes(assistant)) &&
         (validity === ALL || d.validity === validity) &&
+        (review === ALL || d.reviewStatus === review) &&
         (!q ||
           d.title.toLowerCase().includes(q) ||
           d.fileName.toLowerCase().includes(q) ||
           d.tags.some((t) => t.toLowerCase().includes(q))),
     );
-  }, [documents, query, collection, assistant, validity]);
+  }, [documents, query, collection, assistant, validity, review]);
 
   const counts = useMemo(() => {
     const by = (v: DocumentValidity) => documents.filter((d) => d.validity === v).length;
     return {
-      expiring: by("expiring"),
+      expiring: documents.filter((d) => d.reviewStatus === "approved" && d.validity === "expiring").length,
       expired: by("expired"),
-      processing: documents.filter((d) => d.processing !== "ready").length,
+      // Only documents that can actually be reviewed (text extracted).
+      pending: documents.filter((d) => d.reviewStatus === "pending" && d.processing === "ready").length,
     };
   }, [documents]);
 
-  const hasFilters = query !== "" || collection !== ALL || assistant !== ALL || validity !== ALL;
+  const hasFilters = query !== "" || collection !== ALL || assistant !== ALL || validity !== ALL || review !== ALL;
   const clearFilters = () => {
     setQuery("");
     setCollection(ALL);
     setAssistant(ALL);
     setValidity(ALL);
+    setReview(ALL);
   };
   const toggleValidity = (v: DocumentValidity) => setValidity((cur) => (cur === v ? ALL : v));
 
   const openDocument = documents.find((d) => d.id === openId) ?? null;
+  const canReview = (d: KnowledgeDocumentView) => isAdmin || reviewableGroupIds.includes(d.ownerGroupId);
+  const canDelete = (d: KnowledgeDocumentView) =>
+    canReview(d) || (d.uploadedById === currentUserId && (d.reviewStatus === "pending" || d.reviewStatus === "rejected"));
 
   return (
     <PageContainer width="wide">
       <PageHeader
         title="Kunskapsbank"
-        description="Dokument som assistenterna använder som källor. Behörighet till dokument styrs separat från behörighet till assistenter."
+        description="Godkända dokument som assistenterna använder som källor. Du ser dokument som delats med dina grupper, dina egna uppladdningar och dokument du granskar."
         actions={
           canUpload && (
             <Button onClick={() => setUploadOpen(true)}>
@@ -120,7 +138,13 @@ export function KnowledgeView({
       />
 
       <div className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Dokument totalt" value={documents.length} />
+        <StatTile label="Dokument" value={documents.length} />
+        <StatTile
+          label="Väntar på granskning"
+          value={counts.pending}
+          active={review === "pending"}
+          onClick={() => setReview((cur) => (cur === "pending" ? ALL : "pending"))}
+        />
         <StatTile
           label="Går snart ut"
           value={counts.expiring}
@@ -133,7 +157,6 @@ export function KnowledgeView({
           active={validity === "expired"}
           onClick={() => toggleValidity("expired")}
         />
-        <StatTile label="Under bearbetning eller fel" value={counts.processing} />
       </div>
 
       <FilterBar className="mt-6">
@@ -156,15 +179,32 @@ export function KnowledgeView({
           label="Giltighet"
           value={validity}
           onChange={setValidity}
-          allLabel="Alla statusar"
+          allLabel="Giltighet: alla"
           options={Object.entries(VALIDITY_LABELS).map(([value, label]) => ({ value, label }))}
+        />
+        <FilterSelect
+          label="Granskning"
+          value={review}
+          onChange={setReview}
+          allLabel="Granskning: alla"
+          options={Object.entries(REVIEW_LABELS).map(([value, label]) => ({ value, label }))}
         />
         <ClearFiltersButton visible={hasFilters} onClick={clearFilters} />
         <ResultCount shown={filtered.length} total={documents.length} noun="dokument" />
       </FilterBar>
 
       <Panel className="mt-4">
-        {filtered.length === 0 ? (
+        {documents.length === 0 ? (
+          <EmptyState
+            icon={FileText}
+            title="Inga dokument ännu"
+            description={
+              canUpload
+                ? "Ladda upp det första dokumentet. Det granskas innan assistenterna kan använda det."
+                : "Här visas dokument som delats med dina grupper när de har godkänts."
+            }
+          />
+        ) : filtered.length === 0 ? (
           <EmptyState
             icon={SearchX}
             title="Inga dokument matchar"
@@ -182,7 +222,7 @@ export function KnowledgeView({
                 <TableHead>Dokument</TableHead>
                 <TableHead className="hidden md:table-cell">Samling</TableHead>
                 <TableHead className="hidden lg:table-cell">Assistenter</TableHead>
-                <TableHead>Giltighet</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="hidden xl:table-cell">Delning</TableHead>
                 <TableHead className="hidden sm:table-cell">Uppladdad</TableHead>
               </TableRow>
@@ -236,10 +276,12 @@ export function KnowledgeView({
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
-                      {d.processing === "ready" ? (
-                        <ValidityBadge validity={d.validity} />
-                      ) : (
+                      {d.processing !== "ready" ? (
                         <ProcessingBadge state={d.processing} />
+                      ) : d.reviewStatus !== "approved" ? (
+                        <ReviewBadge status={d.reviewStatus} />
+                      ) : (
+                        <ValidityBadge validity={d.validity} />
                       )}
                       <span className="text-xs text-muted-foreground">
                         {d.validUntil
@@ -249,7 +291,7 @@ export function KnowledgeView({
                     </div>
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground xl:table-cell">
-                    {visibilityLabel(d.visibility)}
+                    {sharingLabel(d.sharedGroupIds, groups)}
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground sm:table-cell">
                     {formatShortDate(d.uploadedAt)}
@@ -267,6 +309,8 @@ export function KnowledgeView({
         collectionName={openDocument ? collectionName.get(openDocument.collectionId) ?? "" : ""}
         assistants={assistants}
         groups={groups}
+        canReview={openDocument ? canReview(openDocument) : false}
+        canDelete={openDocument ? canDelete(openDocument) : false}
       />
       {canUpload && (
         <UploadDialog
@@ -274,7 +318,8 @@ export function KnowledgeView({
           onOpenChange={setUploadOpen}
           collections={collections}
           assistants={assistants}
-          groups={groups}
+          ownerGroups={ownerGroups}
+          shareGroups={shareGroups}
         />
       )}
     </PageContainer>

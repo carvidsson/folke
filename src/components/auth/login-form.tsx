@@ -1,66 +1,51 @@
 "use client";
 
 import { ArrowRight } from "lucide-react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useActionState } from "react";
 
-import { PrototypeNotice } from "@/components/common/prototype-notice";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { signInAction, type FormState } from "@/server/auth/actions";
 
-/**
- * VISUAL PROTOTYPE ONLY.
- *
- * The fields are not submitted, stored or checked anywhere and have no `name`
- * attributes. Real sign-in (e-mail + password + mandatory TOTP) will be
- * delegated to the chosen auth provider – do not add credential handling here.
- */
-export function LoginForm() {
-  const router = useRouter();
+import { Field, FormMessage, SubmitButton } from "./form-parts";
+
+/** Step 1: e-mail and password. Credentials go straight to Supabase Auth. */
+export function LoginForm({ notice }: { notice?: string }) {
+  const [state, action] = useActionState<FormState, FormData>(signInAction, {});
 
   return (
-    <form
-      className="mt-8 flex flex-col gap-5"
-      autoComplete="off"
-      onSubmit={(e) => {
-        e.preventDefault();
-        router.push("/");
-      }}
-    >
-      <PrototypeNotice>
-        Detta är en visuell prototyp. Uppgifterna skickas inte och kontrolleras
-        inte – du kommer direkt till demoläget.
-      </PrototypeNotice>
-
+    <form action={action} className="mt-8 flex flex-col gap-5">
+      <FormMessage error={state.error ?? notice} />
+      <Field
+        id="email"
+        name="email"
+        type="email"
+        label="E-postadress"
+        autoComplete="username"
+        required
+        autoFocus={!state.email}
+        defaultValue={state.email}
+        key={state.email ?? "email"}
+      />
       <div className="flex flex-col gap-2">
-        <Label htmlFor="login-email">E-postadress</Label>
-        <Input
-          id="login-email"
-          type="email"
-          placeholder="fornamn.efternamn@exempel.se"
-          autoComplete="off"
-          className="h-10"
-        />
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="login-password">Lösenord</Label>
-        <Input
-          id="login-password"
+        <Field
+          id="password"
+          name="password"
           type="password"
-          autoComplete="off"
-          className="h-10"
+          label="Lösenord"
+          autoComplete="current-password"
+          required
+          autoFocus={Boolean(state.email)}
         />
+        <Link href="/login/forgot" className="self-end text-xs font-medium text-muted-foreground hover:text-foreground">
+          Glömt lösenordet?
+        </Link>
       </div>
-
-      <Button type="submit" size="lg" className="mt-1 h-10 w-full">
+      <SubmitButton>
         Logga in
         <ArrowRight data-icon="inline-end" />
-      </Button>
-
+      </SubmitButton>
       <p className="text-caption text-center">
-        I den färdiga versionen krävs även tvåstegsverifiering med
-        autentiseringsapp.
+        Inloggningen kräver tvåstegsverifiering med en autentiseringsapp.
       </p>
     </form>
   );

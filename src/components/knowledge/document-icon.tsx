@@ -7,6 +7,8 @@ const ICONS = {
   pdf: FileText,
   docx: FileText,
   txt: FileText,
+  md: FileText,
+  csv: FileSpreadsheet,
   xlsx: FileSpreadsheet,
   pptx: Presentation,
 } satisfies Record<DocumentFileType, unknown>;

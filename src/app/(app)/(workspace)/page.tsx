@@ -8,14 +8,14 @@ import { ValidityBadge } from "@/components/knowledge/document-badges";
 import { PageContainer } from "@/components/layout/page-header";
 import { firstName, formatRelative, formatShortDate } from "@/lib/format";
 import { getSession } from "@/server/auth/session";
-import { listAssistantsForUser } from "@/server/data/assistants";
+import { listMyAssistants } from "@/server/data/assistants";
 import { listConversations } from "@/server/data/conversations";
 import { listDocuments } from "@/server/data/documents";
 
 export default async function HomePage() {
   const { user } = await getSession();
   const [assistants, recent, documents] = await Promise.all([
-    listAssistantsForUser(user.id),
+    listMyAssistants(),
     listConversations(user.id, { limit: 5 }),
     listDocuments(),
   ]);
@@ -23,7 +23,12 @@ export default async function HomePage() {
   const assistantById = new Map(assistants.map((a) => [a.id, a]));
   const allowedIds = new Set(assistants.map((a) => a.id));
   const knowledgeUpdates = documents
-    .filter((d) => d.processing === "ready" && d.assistantIds.some((id) => allowedIds.has(id)))
+    .filter(
+      (d) =>
+        d.reviewStatus === "approved" &&
+        d.processing === "ready" &&
+        d.assistantIds.some((id) => allowedIds.has(id)),
+    )
     .slice(0, 4);
 
   return (
@@ -38,6 +43,11 @@ export default async function HomePage() {
 
       <section className="mt-12">
         <SectionHeading title="Dina assistenter" />
+        {assistants.length === 0 && (
+          <p className="rounded-xl border bg-surface px-4 py-6 text-center text-sm text-muted-foreground">
+            Du har inte tilldelats några assistenter ännu. Kontakta en systemadministratör.
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {assistants.map((a) => (
             <Link
@@ -80,9 +90,9 @@ export default async function HomePage() {
                       {assistant && <AssistantAvatar assistant={assistant} size="sm" />}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{c.title}</p>
-                        <p className="truncate text-[0.8125rem] text-muted-foreground">
-                          {c.preview}
-                        </p>
+                        {assistant && (
+                          <p className="truncate text-[0.8125rem] text-muted-foreground">{assistant.name}</p>
+                        )}
                       </div>
                       <span className="hidden shrink-0 text-xs text-subtle-foreground sm:block">
                         {formatRelative(c.updatedAt, now)}
@@ -106,6 +116,9 @@ export default async function HomePage() {
             }
           />
           <ul className="flex flex-col gap-1">
+            {knowledgeUpdates.length === 0 && (
+              <li className="px-2.5 py-2 text-sm text-muted-foreground">Inga godkända dokument ännu.</li>
+            )}
             {knowledgeUpdates.map((d) => (
               <li key={d.id}>
                 <Link

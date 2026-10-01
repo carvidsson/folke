@@ -85,26 +85,17 @@ export function documentValidity(
 }
 
 /**
- * Whether members of a group can see a document through the group itself.
- * "organisation" documents follow assistant access; "restricted" documents
- * are never shared through groups.
+ * Whether members of a group can see a document through sharing. Mirrors the
+ * database rule (app.can_read_document) for display purposes only.
  */
 export function documentVisibleToGroup(
-  doc: Pick<KnowledgeDocument, "visibility" | "assistantIds">,
-  groupId: ID,
-  grants: AssistantGrant[],
+  doc: Pick<KnowledgeDocument, "reviewStatus" | "sharedGroupIds">,
+  group: Pick<UserGroup, "id">,
+  systemGroupIds: ID[],
 ): boolean {
-  switch (doc.visibility.type) {
-    case "groups":
-      return doc.visibility.groupIds.includes(groupId);
-    case "restricted":
-      return false;
-    case "organisation":
-      return grants.some(
-        (g) =>
-          doc.assistantIds.includes(g.assistantId) &&
-          g.subject.type === "group" &&
-          g.subject.groupId === groupId,
-      );
-  }
+  if (doc.reviewStatus !== "approved") return false;
+  return (
+    doc.sharedGroupIds.includes(group.id) ||
+    doc.sharedGroupIds.some((id) => systemGroupIds.includes(id))
+  );
 }

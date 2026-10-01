@@ -3,7 +3,13 @@ import type { Metadata } from "next";
 import { AssistantsView, type AssistantRow } from "@/components/admin/assistants-view";
 import { assistantAccessSources } from "@/lib/domain/access";
 import { requireAdministrationAccess } from "@/server/auth/session";
-import { listAssistantGrants, listAssistants, listCollections } from "@/server/data/assistants";
+import { getAIProvider } from "@/server/ai";
+import {
+  getInstructionsForAdmin,
+  listAssistantGrants,
+  listAssistants,
+  listCollections,
+} from "@/server/data/assistants";
 import { listDocuments } from "@/server/data/documents";
 import { listGroups, listUsers } from "@/server/data/users";
 
@@ -23,8 +29,14 @@ export default async function AdminAssistantsPage() {
   const group = new Map(groups.map((g) => [g.id, g]));
   const activeUsers = users.filter((u) => u.status !== "disabled");
 
-  const rows: AssistantRow[] = assistants.map((assistant) => ({
+  const instructions = await Promise.all(assistants.map((a) => getInstructionsForAdmin(a.id)));
+  const providerId = getAIProvider().id;
+  const providerLabel = providerId === "mock" ? "Mockläge – ingen AI-leverantör är godkänd ännu" : providerId;
+
+  const rows: AssistantRow[] = assistants.map((assistant, i) => ({
     assistant,
+    instructions: instructions[i],
+    providerLabel,
     managerNames: assistant.managerIds.map((id) => userName.get(id) ?? "Okänd"),
     collections: collections.filter((c) => assistant.collectionIds.includes(c.id)),
     documentCount: documents.filter((d) => d.assistantIds.includes(assistant.id)).length,

@@ -2,11 +2,9 @@
 
 import { FolderOpen, Settings2, User, UsersRound } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { DetailList, DetailSection } from "@/components/common/detail-list";
-import { PrototypeNotice } from "@/components/common/prototype-notice";
 import { StatusBadge, type StatusTone } from "@/components/common/status-badge";
 import { PageContainer, PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -19,12 +17,25 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ASSISTANT_STATUS_LABELS } from "@/lib/domain/labels";
 import type { Assistant, AssistantStatus, KnowledgeCollection } from "@/lib/domain/types";
+import { saveAssistantAction } from "@/server/admin/actions";
+
+import { useAdminAction } from "./use-admin-action";
 
 export interface AssistantRow {
   assistant: Assistant;
+  /** Null when the viewer may not read the instructions. */
+  instructions: string | null;
+  providerLabel: string;
   managerNames: string[];
   collections: KnowledgeCollection[];
   documentCount: number;
@@ -99,15 +110,23 @@ export function AssistantsView({ rows }: { rows: AssistantRow[] }) {
 
       <Sheet open={open !== null} onOpenChange={(o) => !o && setOpenId(null)}>
         <SheetContent className="w-full gap-0 overflow-y-auto p-0 sm:max-w-xl">
-          {open && <AssistantConfig row={open} />}
+          {open && <AssistantConfig key={open.assistant.id} row={open} onSaved={() => setOpenId(null)} />}
         </SheetContent>
       </Sheet>
     </PageContainer>
   );
 }
 
-function AssistantConfig({ row }: { row: AssistantRow }) {
+const NEWLINE = "\n";
+
+function AssistantConfig({ row, onSaved }: { row: AssistantRow; onSaved: () => void }) {
   const { assistant: a } = row;
+  const { pending, run } = useAdminAction();
+  const [status, setStatus] = useState<AssistantStatus>(a.status);
+  const [instructions, setInstructions] = useState(row.instructions ?? "");
+  const [prompts, setPrompts] = useState(a.suggestedPrompts.join(NEWLINE));
+  const canEdit = row.instructions !== null;
+
   return (
     <>
       <SheetHeader className="flex-row items-center gap-3.5 p-6 pr-12">
@@ -128,29 +147,49 @@ function AssistantConfig({ row }: { row: AssistantRow }) {
         </div>
 
         <TabsContent value="instructions">
-          <DetailSection title="Systeminstruktioner" className="border-t-0">
-            <Textarea defaultValue={a.instructions} rows={8} className="text-sm leading-6" />
+          <DetailSection title="Status" className="border-t-0">
+            <Select value={status} onValueChange={(v) => setStatus(v as AssistantStatus)} disabled={!canEdit}>
+              <SelectTrigger aria-label="Status" className="h-9 w-48 data-[size=default]:h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(ASSISTANT_STATUS_LABELS) as AssistantStatus[]).map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {ASSISTANT_STATUS_LABELS[s]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-caption mt-2">Endast aktiva assistenter kan användas i chatten.</p>
+          </DetailSection>
+          <DetailSection title="Systeminstruktioner">
+            <Textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={9}
+              maxLength={8000}
+              disabled={!canEdit}
+              aria-label="Systeminstruktioner"
+              className="text-sm leading-6"
+            />
             <p className="text-caption mt-2">
-              Instruktionerna lagras och används endast på servern och visas aldrig för
-              slutanvändare.
+              Används endast på servern och visas aldrig för användarna. Regler om källhänvisningar
+              och skydd mot instruktioner i dokument läggs alltid till automatiskt.
             </p>
           </DetailSection>
           <DetailSection title="Förslag i tom chatt">
-            <ul className="flex flex-col gap-1.5 text-sm">
-              {a.suggestedPrompts.map((p) => (
-                <li key={p} className="rounded-md border bg-surface px-3 py-2">
-                  {p}
-                </li>
-              ))}
-            </ul>
+            <Textarea
+              value={prompts}
+              onChange={(e) => setPrompts(e.target.value)}
+              rows={4}
+              disabled={!canEdit}
+              aria-label="Förslag, ett per rad"
+              className="text-sm leading-6"
+            />
+            <p className="text-caption mt-2">Ett förslag per rad, högst sex.</p>
           </DetailSection>
           <DetailSection title="AI-modell">
-            <DetailList
-              items={[
-                { label: "Leverantör", value: <StatusBadge tone="neutral">Ej vald</StatusBadge> },
-                { label: "Läge", value: "Mockade svar (prototyp)" },
-              ]}
-            />
+            <DetailList items={[{ label: "Leverantör", value: row.providerLabel }]} />
           </DetailSection>
         </TabsContent>
 
@@ -198,12 +237,29 @@ function AssistantConfig({ row }: { row: AssistantRow }) {
         </TabsContent>
       </Tabs>
 
-      <div className="flex flex-col gap-3 border-t p-6">
-        <PrototypeNotice>Ändringar i konfigurationen sparas inte i prototypen.</PrototypeNotice>
-        <div className="flex gap-2">
-          <Button onClick={() => toast("Prototyp: ändringen sparas inte.")}>Spara ändringar</Button>
+      {canEdit && (
+        <div className="flex gap-2 border-t p-6">
+          <Button
+            disabled={pending}
+            onClick={() =>
+              run(
+                () =>
+                  saveAssistantAction(a.id, {
+                    status,
+                    instructions,
+                    suggestedPrompts: prompts
+                      .split(NEWLINE)
+                      .map((p) => p.trim())
+                      .filter(Boolean),
+                  }),
+                onSaved,
+              )
+            }
+          >
+            Spara ändringar
+          </Button>
         </div>
-      </div>
+      )}
     </>
   );
 }

@@ -1,8 +1,7 @@
 "use client";
 
-import { MoreHorizontal, SearchX, UserPlus } from "lucide-react";
+import { SearchX, UserPlus } from "lucide-react";
 import { useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { EmptyState } from "@/components/common/empty-state";
@@ -21,13 +20,6 @@ import { PageContainer, PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Table,
   TableBody,
   TableCell,
@@ -41,10 +33,12 @@ import type { Assistant, Role, User, UserStatus } from "@/lib/domain/types";
 import { formatRelative } from "@/lib/format";
 
 import { InviteUserDialog } from "./invite-user-dialog";
+import { UserActions } from "./user-actions";
 
 export interface UserRow {
   user: User;
   groupNames: string[];
+  groupIds: string[];
   assistantIds: string[];
 }
 
@@ -68,18 +62,18 @@ export function RoleBadge({ role }: { role: Role }) {
   );
 }
 
-const prototypeToast = () => toast("Prototyp: ändringen sparas inte.");
-
 export function UsersView({
   rows,
   assistants,
   groups,
   nowIso,
+  currentUserId,
 }: {
   rows: UserRow[];
   assistants: Assistant[];
   groups: { id: string; name: string }[];
   nowIso: string;
+  currentUserId: string;
 }) {
   const [query, setQuery] = useState("");
   const [role, setRole] = useState(ALL);
@@ -182,7 +176,7 @@ export function UsersView({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map(({ user, groupNames, assistantIds }) => (
+              {filtered.map(({ user, groupNames, groupIds, assistantIds }) => (
                 <TableRow key={user.id}>
                   <TableCell>
                     <div className="flex items-center gap-3">
@@ -252,25 +246,12 @@ export function UsersView({
                     {user.lastActiveAt ? formatRelative(user.lastActiveAt, now) : "Aldrig"}
                   </TableCell>
                   <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon-sm" aria-label={`Åtgärder för ${user.name}`}>
-                          <MoreHorizontal />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={prototypeToast}>Redigera användare</DropdownMenuItem>
-                        <DropdownMenuItem onSelect={prototypeToast}>Ändra roll</DropdownMenuItem>
-                        <DropdownMenuItem onSelect={prototypeToast}>Hantera grupper</DropdownMenuItem>
-                        {user.status === "invited" && (
-                          <DropdownMenuItem onSelect={prototypeToast}>Skicka inbjudan igen</DropdownMenuItem>
-                        )}
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onSelect={prototypeToast}>
-                          {user.status === "disabled" ? "Återaktivera" : "Inaktivera"}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <UserActions
+                      user={user}
+                      groupIds={groupIds}
+                      groups={groups}
+                      isSelf={user.id === currentUserId}
+                    />
                   </TableCell>
                 </TableRow>
               ))}

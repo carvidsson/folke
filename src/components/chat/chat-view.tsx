@@ -1,15 +1,24 @@
 "use client";
 
-import { ArrowDown, CircleAlert, Menu, RotateCcw, SquarePen } from "lucide-react";
+import { ArrowDown, CircleAlert, Menu, MoreHorizontal, RotateCcw, SquarePen, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
+import { toast } from "sonner";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { useShell } from "@/components/layout/app-shell";
 import { SidebarCollapseButton } from "@/components/layout/sidebar-collapse-button";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { takePendingPrompt } from "@/lib/chat/pending-prompt";
 import type { Assistant, Message } from "@/lib/domain/types";
+import { deleteConversationAction } from "@/server/chat/actions";
 
 import { AssistantPicker } from "./assistant-picker";
 import { Composer } from "./composer";
@@ -51,6 +60,8 @@ export function ChatView({
       onSubmit={send}
       onStop={chat.stop}
       isBusy={isBusy}
+      // File contents are not processed in chat yet (see docs/ROADMAP.md).
+      allowAttachments={false}
       autoFocus
       placeholder={`Fråga ${assistant.name}…`}
     />
@@ -60,6 +71,7 @@ export function ChatView({
     <div className="flex h-full flex-col">
       <ChatHeader
         title={conversation?.title}
+        conversationId={conversation?.id}
         picker={
           <AssistantPicker
             assistants={assistants}
@@ -138,8 +150,32 @@ export function ChatView({
   );
 }
 
-function ChatHeader({ title, picker }: { title?: string; picker: React.ReactNode }) {
+function ChatHeader({
+  title,
+  picker,
+  conversationId,
+}: {
+  title?: string;
+  picker: React.ReactNode;
+  conversationId?: string;
+}) {
   const { sidebarVisible, openMobileNav } = useShell();
+  const router = useRouter();
+  const [deleting, startDelete] = useTransition();
+
+  function remove() {
+    if (!conversationId) return;
+    if (!window.confirm("Ta bort konversationen? Det går inte att ångra.")) return;
+    startDelete(async () => {
+      const result = await deleteConversationAction(conversationId);
+      if (result.ok) {
+        toast.success(result.message);
+        router.push("/chat");
+      } else {
+        toast.error(result.error);
+      }
+    });
+  }
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-1 px-2 sm:px-3">
@@ -164,16 +200,28 @@ function ChatHeader({ title, picker }: { title?: string; picker: React.ReactNode
           </h1>
         </>
       )}
-      <Button
-        asChild
-        variant="ghost"
-        size="icon"
-        className={sidebarVisible ? "ml-auto lg:hidden" : "ml-auto"}
-      >
-        <Link href="/chat" aria-label="Ny chatt">
-          <SquarePen />
-        </Link>
-      </Button>
+      <div className="ml-auto flex items-center gap-1">
+        {conversationId && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="Fler alternativ för konversationen" disabled={deleting}>
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onSelect={remove}>
+                <Trash2 />
+                Ta bort konversation
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <Button asChild variant="ghost" size="icon" className={sidebarVisible ? "lg:hidden" : undefined}>
+          <Link href="/chat" aria-label="Ny chatt">
+            <SquarePen />
+          </Link>
+        </Button>
+      </div>
     </header>
   );
 }

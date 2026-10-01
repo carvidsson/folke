@@ -43,6 +43,8 @@ export interface UserGroup {
   name: string;
   description: string;
   memberIds: ID[];
+  /** Members who may review documents owned by the group. */
+  managerIds: ID[];
   /** Maintained automatically (e.g. "all employees"); not editable. */
   system?: boolean;
 }
@@ -69,12 +71,10 @@ export interface Assistant {
   icon: AssistantIconKey;
   tone: AssistantTone;
   status: AssistantStatus;
-  /** Users with the assistant_manager role responsible for this assistant. */
+  /** Users responsible for this assistant's configuration. */
   managerIds: ID[];
   /** Knowledge collections the assistant may retrieve from. */
   collectionIds: ID[];
-  /** System instructions. Server-side only once a backend exists. */
-  instructions: string;
   suggestedPrompts: string[];
 }
 
@@ -96,14 +96,6 @@ export interface AssistantGrant {
   subject: GrantSubject;
 }
 
-export type DocumentVisibility =
-  /** Everyone with access to one of the linked assistants. */
-  | { type: "organisation" }
-  /** Only the listed groups. */
-  | { type: "groups"; groupIds: ID[] }
-  /** Only the uploader and assistant managers. */
-  | { type: "restricted" };
-
 // ---------------------------------------------------------------------------
 // Knowledge base
 // ---------------------------------------------------------------------------
@@ -114,10 +106,13 @@ export interface KnowledgeCollection {
   description: string;
 }
 
-export type DocumentFileType = "pdf" | "docx" | "xlsx" | "pptx" | "txt";
+export type DocumentFileType = "pdf" | "docx" | "xlsx" | "pptx" | "txt" | "md" | "csv";
 
-/** Processing pipeline state (upload -> parse -> embed). */
-export type DocumentProcessingState = "ready" | "processing" | "failed";
+/** Processing pipeline state (upload -> extract text -> index). */
+export type DocumentProcessingState = "queued" | "processing" | "ready" | "failed";
+
+/** Review workflow. Only approved documents are used as sources. */
+export type DocumentReviewStatus = "pending" | "approved" | "rejected" | "archived";
 
 /** Derived from validity dates relative to "now". */
 export type DocumentValidity = "valid" | "expiring" | "expired" | "upcoming";
@@ -136,8 +131,14 @@ export interface KnowledgeDocument {
   uploadedAt: Timestamp;
   validFrom: CalendarDate;
   validUntil: CalendarDate | null;
-  visibility: DocumentVisibility;
+  /** Group responsible for the document; its managers review it. */
+  ownerGroupId: ID;
+  /** Groups whose members may see the document once approved. */
+  sharedGroupIds: ID[];
+  reviewStatus: DocumentReviewStatus;
+  reviewComment: string | null;
   processing: DocumentProcessingState;
+  processingError: string | null;
   pageCount: number | null;
 }
 

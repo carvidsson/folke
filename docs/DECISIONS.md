@@ -76,17 +76,104 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 **Beslut:** Geist Sans ersätter Inter i hela gränssnittet. Geist Mono används för monospace, till exempel kod. Båda laddas med `next/font/google` och kopplas centralt via `--font-sans`, `--font-heading` och `--font-mono` i `globals.css`.
 **Konsekvens:** Storlekar, vikter, radavstånd och övrig design är oförändrade. De Inter-specifika OpenType-inställningarna (`cv11`, `ss01`) togs bort, eftersom de betyder något annat i Geist. Builden kräver fortfarande nätverksåtkomst till Google Fonts.
 
+### ADR-014 – Supabase i Stockholm som backend
+
+**Beslut:** Supabase (PostgreSQL, Auth och Storage) i regionen North EU (Stockholm) för databas, autentisering och filer.
+**Motiv:** Fastställt beslut om databas i Sverige. En plattform för data, auth och lagring med RLS i databasen.
+
+### ADR-015 – Behörighet i databasen (RLS) som sista skyddslinje
+
+**Beslut:** Alla tabeller har RLS via hjälpfunktioner i det privata schemat `app`. Varje policy kräver `app.authorized()`, det vill säga en aktiv profil, `aal2` och en session yngre än 7 dagar. Kolumnskydd (roll, status, bearbetning och granskning) görs med triggers. Instruktionskolumnen är inte beviljad till API-rollen.
+**Motiv:** Säkerheten får inte bero på att varje rad applikationskod är korrekt.
+**Konsekvens:** Nya tabeller måste få RLS och tester i `tests/db`. `INSERT … RETURNING` kräver att den nya raden är läsbar direkt i policyn (se `documents_select`).
+
+### ADR-016 – Användarens klient som standard, hemlig nyckel som undantag
+
+**Beslut:** Repositories och actions använder användarens Supabase-klient. Adminklienten används bara för inbjudan, spärr, TOTP-återställning, lagring, textbitar, kostnadslogg och säkerhetslogg, och först efter behörighetskontroll.
+**Motiv:** Triggers loggar rätt aktör, och ett fel i applikationskoden kan inte kringgå RLS.
+
+### ADR-017 – Inbjudan och onboarding
+
+**Beslut:** Endast inbjudan (öppen registrering av). E-postlänkar verifieras på servern (`/auth/confirm` med `token_hash`). Kontot blir aktivt först efter första TOTP-verifieringen. Den första administratören skapas med `npm run bootstrap:admin`.
+
+### ADR-018 – 7-dagarssessioner i tre lager
+
+**Beslut:** Sessionsstarten räknas från den tidigaste `amr`-tidsstämpeln och kontrolleras i `getSession()` och i RLS (`app.session_fresh()`). Kontrollen misslyckas stängt. Med Pro sätts även Auth time-box till 168 h.
+**Motiv:** Gränsen ska gälla oavsett Supabase-plan och även för direkta API-anrop.
+
+### ADR-019 – Fulltextsökning (svenska) före vektorsökning
+
+**Beslut:** Dokumentsökning med PostgreSQL:s svenska fulltextsökning (`tsvector`, GIN och `ts_rank_cd`) i en SECURITY INVOKER-funktion.
+**Motiv:** Kräver ingen embedding-leverantör (ingen är godkänd), och ingen dokumenttext lämnar systemet. RLS gäller per rad. pgvector kan läggas till senare.
+
+### ADR-020 – Server äger chatthistoriken
+
+**Beslut:** Klienten skickar bara det nya meddelandet. Servern sparar, läser historiken, söker och sparar svaret med källor, även vid avbrott. Protokollet har fått händelsen `conversation`.
+**Motiv:** Förhindrar förfalskad historik. Konversationen får sin URL så fort den skapats.
+
+### ADR-021 – Mock-provider som citerar källor
+
+**Beslut:** Mock-providern svarar genom att citera de mest relevanta utdragen med `[n]`. Ingen extern AI anropas förrän en leverantör är godkänd.
+**Motiv:** Hela kedjan kan testas utan att data lämnar systemet.
+
+### ADR-022 – Dokumentgranskning per ägargrupp och intygande
+
+**Beslut:** Dokument ägs av en grupp, delas som standard med den och kan delas med fler grupper. Endast systemadministratörer och ägargruppens ansvariga granskar. Under piloten måste uppladdaren intyga att dokumentet är internt och saknar kunduppgifter.
+
+### ADR-023 – Egen läsning av Excel och PowerPoint
+
+**Beslut:** `.xlsx` och `.pptx` läses som ZIP/XML med `jszip`, i stället för med `exceljs`.
+**Motiv:** `exceljs` drar in en sårbar version av `uuid`. Textutvinning kräver inte ett fullständigt kalkylbibliotek.
+
+### ADR-024 – PGlite för RLS-tester
+
+**Beslut:** RLS testas med de riktiga migrationerna i PGlite och en minimal emulering av Supabases `auth`-schema.
+**Motiv:** Snabba och deterministiska tester utan Docker. Auth, Storage och PostgREST verifieras separat mot ett riktigt projekt.
+
+### ADR-025 – Explicita tabellbehörigheter för API-rollerna
+
+**Beslut:** Tabellbehörigheter för `authenticated` och `service_role` ges explicit i migrationer (`20261001120000_api_grants.sql`), med kolumnbehörigheter där det behövs. `anon` får inga.
+**Motiv:** Supabase-projektet ger inga automatiska behörigheter på nya tabeller. Upptäcktes när `bootstrap:admin` fick `permission denied`. RLS avgör fortfarande vilka rader som nås.
+**Konsekvens:** Testmiljön (PGlite) ger inte heller några automatiska behörigheter, så saknade grants fångas av `npm run test:db`.
+
+### ADR-026 – Frågestyrda utdrag i sökningen
+
+**Beslut:** `search_document_chunks` returnerar ett utdrag (`ts_headline`) runt de matchande orden, och det används i källkort och mocksvar (migration `20261002090000`).
+**Motiv:** Aurora-testet visade början av textbiten i stället för avsnittet med svaret. Korta dokument blir en enda textbit, så utdraget måste väljas utifrån frågan.
+
+### ADR-027 – Åtkomst kräver registrerad TOTP
+
+**Beslut:** `app.authorized()` kräver även `profiles.mfa_enrolled_at` (migration `20261002100000`). Administratörens TOTP-återställning nollställer den.
+**Motiv:** Vid förlorad eller stulen telefon måste befintliga sessioner sluta fungera direkt, inte först när token löper ut.
+
+### ADR-028 – Webbhärdning: CSP med nonce och httpOnly-cookies
+
+**Beslut:** Proxyn sätter en strikt CSP (skript bara med nonce, `frame-ancestors 'none'`, `connect-src` endast den egna domänen och Supabase). Sessionscookies är `httpOnly`, `SameSite=Lax` och `Secure` över HTTPS, med en livslängd på 7 dagar. Alla sidor renderas dynamiskt.
+**Motiv:** Folke ska visa modellutdata och dokumenttext. XSS ska varken kunna köra skript eller stjäla sessioner.
+**Konsekvens:** Inline-skript kräver nonce. `style-src` tillåter inline-stilar för UI-komponenternas style-attribut.
+
+### ADR-029 – Livetester mot Supabase med syntetiska användare
+
+**Beslut:** Säkerhetskritiska regler testas även mot det riktiga projektet (`npm run test:live`) med syntetiska användare som skapas och tas bort i testet. Säkerhetsloggen lämnas orörd.
+**Motiv:** PGlite emulerar inte Auth, Storage eller PostgREST. Skillnader (som saknade grants) ska upptäckas av tester, inte av användare.
+**Konsekvens:** Testerna kräver `.env.local` och körs manuellt före releaser. På sikt ska de köras mot ett separat testprojekt.
+
+### ADR-030 – Ingen automatisk permanent radering
+
+**Beslut:** Gallring av konversationer startas manuellt av administratör (minst 12 månaders inaktivitet). Inaktiverade konton, säkerhetslogg och kostnadsstatistik raderas inte automatiskt.
+**Motiv:** Det finns inget beslut om automatisk radering. Lagringstider för logg och statistik samt rutin för att radera konton är öppna beslut.
+
 ---
 
-## Öppna beslut inför etapp 2
+## Öppna beslut
 
 | Fråga | Alternativ | Att väga in |
 |---|---|---|
-| **AI-leverantör** | Anthropic (Claude), OpenAI, Azure OpenAI, Google, Mistral med flera | Datalagring och behandling inom EU, avtal (DPA), zero data retention, kvalitet på svenska, kostnad |
-| **Databas och auth** | Supabase (Postgres, Auth, Storage, pgvector), alternativt Neon + separat auth | Region i EU, TOTP-stöd, RLS, självhosting kontra managed |
-| **Embeddings och vektorlager** | pgvector i samma databas, alternativt separat vektordatabas | Enkelhet kontra skala. För 20–50 användare räcker pgvector sannolikt. |
-| **Textutvinning ur dokument** | Egen pipeline, alternativt tjänst | Kvalitet på Excel/PowerPoint och skannade PDF:er |
-| **Loggning och lagringstid** | – | Hur länge konversationer sparas, vem som får se dem och om promptar loggas |
+| **AI-leverantör** | Inriktning: OpenAI med EU-datalagring ([MVP-0.3-PLAN.md](MVP-0.3-PLAN.md)) | Godkännande för EU-datalagring och ZDR/MAM, DPA, att valda modeller omfattas av regional behandling |
+| **Lagringstid för säkerhetslogg och kostnadsstatistik** | t.ex. 12–24 månader | Krav på spårbarhet kontra minimering |
+| **Radering av konton** | Manuell rutin, alternativt automatiskt efter X månader som inaktiverat | Dokument som personen laddat upp måste flyttas först |
+| **Embeddings och vektorlager** | pgvector i Supabase | Kräver godkänd leverantör. Fulltextsökning används tills dess (ADR-019). |
+| **OCR för skannade PDF:er** | Lokal OCR, alternativt tjänst | Skannade dokument ger ingen text i dag och markeras som fel vid bearbetning |
+| **Supabase-plan** | Free (nu) eller Pro | Pro rekommenderas före pilot: time-box för sessioner, skydd mot läckta lösenord, säkerhetskopior |
 | **SSO** | E-post + lösenord + TOTP (planerat), eventuellt Microsoft Entra ID senare | Befintlig identitetsplattform hos Börjessons |
-| **Node-version** | 22 LTS (rekommenderas), lokal miljö kör 20.17 | Vissa verktyg kräver ≥ 20.19 |
-| **Testverktyg** | Vitest + Testing Library, Playwright | Införs i etapp 2 |
+| **E2E-tester** | Playwright mot en test-databas i Supabase | Efter att projektet skapats |

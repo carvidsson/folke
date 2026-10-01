@@ -1,5 +1,8 @@
 import { redirect } from "next/navigation";
 
-export default function AdminIndexPage() {
-  redirect("/admin/users");
+import { requireAdministrationAccess } from "@/server/auth/session";
+
+export default async function AdminIndexPage() {
+  const { user } = await requireAdministrationAccess();
+  redirect(user.role === "system_admin" ? "/admin/users" : "/admin/assistants");
 }

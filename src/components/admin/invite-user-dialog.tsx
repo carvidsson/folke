@@ -1,9 +1,8 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, useTransition } from "react";
 import { toast } from "sonner";
 
-import { PrototypeNotice } from "@/components/common/prototype-notice";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -25,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { ROLE_DESCRIPTIONS, ROLE_LABELS } from "@/lib/domain/labels";
 import type { Role } from "@/lib/domain/types";
+import { inviteUserAction } from "@/server/admin/actions";
 
 export function InviteUserDialog({
   open,
@@ -37,15 +37,25 @@ export function InviteUserDialog({
 }) {
   const id = useId();
   const [role, setRole] = useState<Role>("employee");
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  function close() {
+    onOpenChange(false);
+    setRole("employee");
+    setGroupIds([]);
+    setError(null);
+  }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-lg">Bjud in användare</DialogTitle>
           <DialogDescription>
-            Användaren får en inbjudan via e-post och måste aktivera tvåstegsverifiering vid
-            första inloggningen.
+            Användaren får ett e-postmeddelande med en länk för att välja lösenord och aktivera
+            tvåstegsverifiering. Kontot blir aktivt efter första inloggningen.
           </DialogDescription>
         </DialogHeader>
 
@@ -54,19 +64,36 @@ export function InviteUserDialog({
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
-            toast("Prototyp: ingen inbjudan har skickats.");
-            onOpenChange(false);
+            const form = new FormData(e.currentTarget);
+            startTransition(async () => {
+              const result = await inviteUserAction({
+                email: String(form.get("email") ?? ""),
+                fullName: String(form.get("fullName") ?? ""),
+                role,
+                groupIds,
+              });
+              if (result.ok) {
+                toast.success(result.message);
+                close();
+              } else {
+                setError(result.error);
+              }
+            });
           }}
         >
-          <PrototypeNotice>Inga inbjudningar skickas och ingen användare skapas.</PrototypeNotice>
+          {error && (
+            <p role="alert" className="rounded-lg bg-destructive/6 px-3 py-2.5 text-sm text-destructive">
+              {error}
+            </p>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
               <Label htmlFor={`${id}-name`}>Namn</Label>
-              <Input id={`${id}-name`} required className="h-9" />
+              <Input id={`${id}-name`} name="fullName" required minLength={2} maxLength={120} className="h-9" />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor={`${id}-email`}>E-postadress</Label>
-              <Input id={`${id}-email`} type="email" required className="h-9" />
+              <Input id={`${id}-email`} name="email" type="email" required className="h-9" />
             </div>
           </div>
           <div className="flex flex-col gap-2">
@@ -90,20 +117,26 @@ export function InviteUserDialog({
             <div className="flex flex-wrap gap-2">
               {groups.map((g) => (
                 <label key={g.id} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
-                  <Checkbox />
+                  <Checkbox
+                    checked={groupIds.includes(g.id)}
+                    onCheckedChange={(c) =>
+                      setGroupIds((ids) => (c ? [...ids, g.id] : ids.filter((x) => x !== g.id)))
+                    }
+                  />
                   {g.name}
                 </label>
               ))}
+              {groups.length === 0 && <p className="text-caption">Inga grupper ännu.</p>}
             </div>
           </fieldset>
         </form>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={close} disabled={pending}>
             Avbryt
           </Button>
-          <Button type="submit" form={`${id}-form`}>
-            Skicka inbjudan
+          <Button type="submit" form={`${id}-form`} disabled={pending}>
+            {pending ? "Skickar…" : "Skicka inbjudan"}
           </Button>
         </DialogFooter>
       </DialogContent>

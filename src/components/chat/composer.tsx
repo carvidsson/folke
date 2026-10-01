@@ -17,8 +17,9 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const ACCEPT = ".pdf,.docx,.xlsx,.pptx,.txt,.csv,.png,.jpg,.jpeg";
 
 /**
- * Message input with attachments. Attachments are only described (name,
- * type, size) – file contents are not read or uploaded in the prototype.
+ * Message input with optional attachments. Attachments are only described
+ * (name, type, size) – file contents are not read or uploaded yet, so chat
+ * views keep them switched off until that exists.
  */
 export function Composer({
   onSubmit,

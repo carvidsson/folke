@@ -8,7 +8,7 @@ Folke ska kännas som ett etablerat, professionellt arbetsverktyg: lugnt, tydlig
 2. **Återhållsam färg.** Neutrala ytor och marinblå text. Salviagrönt är en diskret accent. Statusfärger används bara för status.
 3. **Luft i översikter, täthet i administration.** Startsida och chatt har generösa marginaler. Tabellvyer får vara informationstäta.
 4. **Chatten först.** I chattläget får samtalet maximal yta, och sidomenyn kan döljas.
-5. **Ärlighet.** UI som inte är kopplat till en backend märks med en prototypnotis. Säkerhetsfunktioner visas aldrig som aktiva när de inte är det.
+5. **Ärlighet.** Funktioner som inte är klara visas inte som om de fungerade (till exempel är chattbilagor avstängda). Säkerhetsstatus visas bara när den är verklig. Mockläget för AI anges i sidomenyn och i svaren.
 6. **Inga AI-klichéer.** Inga gradienter, glöd, gnistor, oskärpa eller animerade effekter utöver det som hjälper användaren.
 
 ## Varumärke
@@ -92,8 +92,9 @@ Folke-specifika byggstenar:
 | `FilterBar`, `SearchInput`, `FilterSelect` | `common/filters.tsx` | Filtrering i listvyer |
 | `DetailList`, `DetailSection` | `common/detail-list.tsx` | Detaljpaneler |
 | `EmptyState` | `common/` | Tomma tillstånd |
-| `PrototypeNotice` | `common/` | Markerar okopplad funktionalitet |
 | `Composer`, `AssistantPicker`, `Markdown`, `Sources` | `chat/` | Chattupplevelsen |
+| `AuthShell`, `form-parts` | `auth/` | Inloggningsstegen |
+| `ReviewBadge`, `ProcessingBadge`, `ValidityBadge` | `knowledge/document-badges.tsx` | Dokumentstatus |
 
 ## Ikoner
 

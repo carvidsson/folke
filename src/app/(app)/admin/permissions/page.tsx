@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { PermissionsView, type PermissionsData } from "@/components/admin/permissions-view";
 import { documentVisibleToGroup } from "@/lib/domain/access";
 import type { Role } from "@/lib/domain/types";
-import { requireAdministrationAccess } from "@/server/auth/session";
+import { requireSystemAdminPage } from "@/server/auth/session";
 import { listAssistantGrants, listAssistants, listCollections } from "@/server/data/assistants";
 import { listDocuments } from "@/server/data/documents";
 import { listGroups, listUsers } from "@/server/data/users";
@@ -11,7 +11,7 @@ import { listGroups, listUsers } from "@/server/data/users";
 export const metadata: Metadata = { title: "Behörigheter" };
 
 export default async function AdminPermissionsPage() {
-  await requireAdministrationAccess();
+  await requireSystemAdminPage();
   const [groups, users, assistants, grants, collections, documents] = await Promise.all([
     listGroups(),
     listUsers(),
@@ -21,6 +21,7 @@ export default async function AdminPermissionsPage() {
     listDocuments(),
   ]);
   const userName = new Map(users.map((u) => [u.id, u.name]));
+  const systemGroupIds = groups.filter((g) => g.system).map((g) => g.id);
 
   const data: PermissionsData = {
     groups: groups.map((g) => ({ id: g.id, name: g.name, memberCount: g.memberIds.length })),
@@ -38,6 +39,7 @@ export default async function AdminPermissionsPage() {
         ? [{ id: x.id, userName: userName.get(x.subject.userId) ?? "Okänd", assistantId: x.assistantId }]
         : [],
     ),
+    users: users.filter((u) => u.status !== "disabled").map(({ id, name }) => ({ id, name })),
     collections: collections.map((c) => ({ id: c.id, name: c.name })),
     documentCoverage: Object.fromEntries(
       groups.map((g) => [
@@ -48,7 +50,7 @@ export default async function AdminPermissionsPage() {
             return [
               c.id,
               {
-                visible: inCollection.filter((d) => documentVisibleToGroup(d, g.id, grants)).length,
+                visible: inCollection.filter((d) => documentVisibleToGroup(d, g, systemGroupIds)).length,
                 total: inCollection.length,
               },
             ];

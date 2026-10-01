@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 
 import { UsersView, type UserRow } from "@/components/admin/users-view";
 import { accessibleAssistantIds } from "@/lib/domain/access";
-import { requireAdministrationAccess } from "@/server/auth/session";
+import { requireSystemAdminPage } from "@/server/auth/session";
 import { listAssistantGrants, listAssistants } from "@/server/data/assistants";
 import { listGroups, listUsers } from "@/server/data/users";
 
 export const metadata: Metadata = { title: "Användare" };
 
 export default async function AdminUsersPage() {
-  await requireAdministrationAccess();
+  const { user: me } = await requireSystemAdminPage();
   const [users, groups, assistants, grants] = await Promise.all([
     listUsers(),
     listGroups(),
@@ -22,6 +22,7 @@ export default async function AdminUsersPage() {
     groupNames: groups
       .filter((g) => !g.system && g.memberIds.includes(user.id))
       .map((g) => g.name),
+    groupIds: groups.filter((g) => !g.system && g.memberIds.includes(user.id)).map((g) => g.id),
     assistantIds: user.status === "disabled" ? [] : accessibleAssistantIds(user.id, grants, groups),
   }));
 
@@ -29,7 +30,8 @@ export default async function AdminUsersPage() {
     <UsersView
       rows={rows}
       assistants={assistants}
-      groups={groups.map(({ id, name }) => ({ id, name }))}
+      groups={groups.filter((g) => !g.system).map(({ id, name }) => ({ id, name }))}
+      currentUserId={me.id}
       nowIso={new Date().toISOString()}
     />
   );

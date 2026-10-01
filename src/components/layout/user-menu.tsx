@@ -57,13 +57,14 @@ export function UserMenu({ user }: { user: UserMenuUser }) {
           )}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          {/* Prototype: returns to the login view; there is no session to end. */}
-          <Link href="/login">
-            <LogOut />
-            Logga ut
-          </Link>
-        </DropdownMenuItem>
+        <form action="/auth/signout" method="post">
+          <DropdownMenuItem asChild>
+            <button type="submit" className="w-full">
+              <LogOut />
+              Logga ut
+            </button>
+          </DropdownMenuItem>
+        </form>
       </DropdownMenuContent>
     </DropdownMenu>
   );

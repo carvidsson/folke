@@ -1,13 +1,13 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { ChatSidebar } from "@/components/layout/chat-sidebar";
 import { getSession } from "@/server/auth/session";
-import { listAssistantsForUser } from "@/server/data/assistants";
+import { listMyAssistants } from "@/server/data/assistants";
 import { listConversations } from "@/server/data/conversations";
 
 export default async function ChatLayout({ children }: { children: React.ReactNode }) {
   const { user } = await getSession();
   const [assistants, conversations] = await Promise.all([
-    listAssistantsForUser(user.id),
+    listMyAssistants(),
     listConversations(user.id),
   ]);
 

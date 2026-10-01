@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 
 import { streamChat } from "@/lib/chat/client";
@@ -12,38 +13,44 @@ export interface OutgoingMessage {
   attachments: Attachment[];
 }
 
-function newId(prefix: string) {
-  return `${prefix}-${crypto.randomUUID()}`;
+function tempId() {
+  return `tmp-${crypto.randomUUID()}`;
 }
 
 /**
- * Client-side chat state. Messages live in memory only – nothing is persisted
- * in the prototype. When a backend exists, the server stores messages and this
- * hook only mirrors the stream.
+ * Client-side chat state. The server stores every message; this hook mirrors
+ * the stream and keeps the UI responsive. A new conversation gets its URL as
+ * soon as the server has created it.
  */
 export function useChat({
   assistantId,
-  conversationId,
+  conversationId: initialConversationId,
   initialMessages = [],
 }: {
   assistantId: string;
   conversationId: string | null;
   initialMessages?: Message[];
 }) {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const conversationId = useRef<string | null>(initialConversationId);
+  const lastOutgoing = useRef<OutgoingMessage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const run = useCallback(
-    async (history: Message[]) => {
-      const reply: Message = {
-        id: newId("msg"),
-        role: "assistant",
-        content: "",
+  const send = useCallback(
+    async (outgoing: OutgoingMessage, { isRetry = false } = {}) => {
+      lastOutgoing.current = outgoing;
+      const reply: Message = { id: tempId(), role: "assistant", content: "", createdAt: new Date().toISOString() };
+      const userMessage: Message = {
+        id: tempId(),
+        role: "user",
+        content: outgoing.text,
         createdAt: new Date().toISOString(),
+        attachments: outgoing.attachments.length ? outgoing.attachments : undefined,
       };
-      setMessages([...history, reply]);
+      setMessages((all) => [...(isRetry ? all : [...all, userMessage]), reply]);
       setStatus("submitted");
       setError(null);
 
@@ -52,23 +59,26 @@ export function useChat({
 
       const controller = new AbortController();
       abortRef.current = controller;
+      let createdConversation = false;
 
       try {
         await streamChat(
           {
             assistantId,
-            conversationId,
-            messages: history.map(({ role, content, attachments }) => ({
-              role,
-              content,
-              attachments: attachments?.map(({ name, mimeType, sizeBytes }) => ({
-                name,
-                mimeType,
-                sizeBytes,
-              })),
-            })),
+            conversationId: conversationId.current,
+            message: {
+              content: outgoing.text,
+              attachments: outgoing.attachments.map(({ name, mimeType, sizeBytes }) => ({ name, mimeType, sizeBytes })),
+            },
           },
           (event) => {
+            if (event.type === "conversation") {
+              if (event.created) {
+                conversationId.current = event.conversationId;
+                createdConversation = true;
+                window.history.replaceState(null, "", `/chat/${event.conversationId}`);
+              }
+            }
             if (event.type === "sources") update((m) => ({ ...m, sources: event.sources }));
             if (event.type === "text") {
               setStatus("streaming");
@@ -81,39 +91,27 @@ export function useChat({
         setStatus("idle");
       } catch (err) {
         if (controller.signal.aborted) {
-          // Keep whatever was streamed; drop the reply if nothing arrived.
           setMessages((all) => all.filter((m) => m.id !== reply.id || m.content));
           setStatus("idle");
-          return;
+        } else {
+          setMessages((all) => all.filter((m) => m.id !== reply.id));
+          setError(err instanceof Error ? err.message : "Något gick fel.");
+          setStatus("error");
         }
-        setMessages((all) => all.filter((m) => m.id !== reply.id));
-        setError(err instanceof Error ? err.message : "Något gick fel.");
-        setStatus("error");
       } finally {
         abortRef.current = null;
+        // Refresh server components (sidebar history) once the new
+        // conversation exists.
+        if (createdConversation) router.refresh();
       }
     },
-    [assistantId, conversationId],
+    [assistantId, router],
   );
 
-  const send = useCallback(
-    (outgoing: OutgoingMessage) => {
-      const userMessage: Message = {
-        id: newId("msg"),
-        role: "user",
-        content: outgoing.text,
-        createdAt: new Date().toISOString(),
-        attachments: outgoing.attachments.length ? outgoing.attachments : undefined,
-      };
-      void run([...messages, userMessage]);
-    },
-    [messages, run],
-  );
-
-  /** Re-run the last request after an error. */
+  /** Re-send the last message after an error (the server stores it again). */
   const retry = useCallback(() => {
-    if (messages.at(-1)?.role === "user") void run(messages);
-  }, [messages, run]);
+    if (lastOutgoing.current) void send(lastOutgoing.current, { isRetry: true });
+  }, [send]);
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
@@ -122,7 +120,7 @@ export function useChat({
     status,
     error,
     isBusy: status === "submitted" || status === "streaming",
-    send,
+    send: (outgoing: OutgoingMessage) => void send(outgoing),
     retry,
     stop,
   };

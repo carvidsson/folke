@@ -1,27 +1,19 @@
 import "server-only";
 
-import { CANNED_REPLIES, type CannedReply } from "@/mocks/responses";
-
-import type { AIProvider, ChatCompletionInput } from "../types";
+import type { AIProvider, ChatCompletionInput, ContextChunk } from "../types";
 
 /**
- * Mock provider: streams canned Swedish replies with realistic pacing.
- * Makes no network calls and needs no API key.
+ * Mock provider – makes no network calls and sends no data anywhere.
+ *
+ * It answers "extractively": it quotes the most relevant retrieved excerpts
+ * with correct [n] citations. That exercises the whole pipeline (access
+ * control, retrieval, citations, persistence, cost tracking) without an AI
+ * vendor, which is required until a vendor is approved.
  */
-
-function pickReply(assistantId: string, prompt: string): CannedReply | null {
-  const replies = CANNED_REPLIES[assistantId];
-  if (!replies?.length) return null;
-  const text = prompt.toLowerCase();
-  return (
-    replies.find((r) => r.keywords.some((k) => text.includes(k))) ??
-    replies.find((r) => r.keywords.length === 0) ??
-    replies[0]
-  );
-}
 
 function sleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
     const timer = setTimeout(resolve, ms);
     signal?.addEventListener("abort", () => {
       clearTimeout(timer);
@@ -30,33 +22,46 @@ function sleep(ms: number, signal?: AbortSignal) {
   });
 }
 
-/** Splits text into small word-ish chunks to imitate token streaming. */
-function chunk(text: string): string[] {
-  return text.match(/\S+\s*|\s+/g) ?? [text];
+function firstSentences(text: string, max = 240) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return `${end > 80 ? cut.slice(0, end + 1) : cut.trimEnd()}…`;
+}
+
+export function composeMockAnswer(context: ContextChunk[]): string {
+  const note =
+    "_Mockläge: inget AI-anrop görs. Svaret består av utdrag ur kunskapsbanken som matchar din fråga._";
+  if (!context.length) {
+    return `${note}\n\nJag hittade inga godkända dokument som matchar frågan och som du har behörighet till. Prova andra sökord, eller be en ansvarig att ladda upp och godkänna underlag.`;
+  }
+  const lines = context
+    .slice(0, 4)
+    .map((c) => `- **${c.title}**${c.location ? ` (${c.location})` : ""}: ${firstSentences(c.snippet || c.content, 320)} [${c.index}]`);
+  return `${note}\n\nFöljande avsnitt är mest relevanta:\n\n${lines.join("\n")}`;
+}
+
+/** Rough token estimate (≈4 characters per token) for usage tracking. */
+export function estimateTokens(text: string) {
+  return Math.ceil(text.length / 4);
 }
 
 export const mockProvider: AIProvider = {
   id: "mock",
 
-  async *streamChat({ assistant, messages, signal }: ChatCompletionInput) {
-    const prompt = messages.findLast((m) => m.role === "user")?.content ?? "";
-    const reply = pickReply(assistant.id, prompt);
-
-    // Simulated "thinking" / retrieval latency.
-    await sleep(900, signal);
-
-    if (!reply) {
-      yield { type: "text", delta: "Jag har inget svar att visa i prototypen." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (reply.sources.length) yield { type: "sources", sources: reply.sources };
-
-    for (const piece of chunk(reply.content)) {
-      await sleep(18 + Math.random() * 30, signal);
+  async *streamChat({ system, messages, context, signal }: ChatCompletionInput) {
+    await sleep(500, signal);
+    const answer = composeMockAnswer(context);
+    for (const piece of answer.match(/\S+\s*|\s+/g) ?? [answer]) {
+      await sleep(12, signal);
       yield { type: "text", delta: piece };
     }
-    yield { type: "done" };
+    yield {
+      type: "usage",
+      model: "mock",
+      inputTokens: estimateTokens(system + messages.map((m) => m.content).join("\n")),
+      outputTokens: estimateTokens(answer),
+    };
   },
 };

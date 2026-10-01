@@ -3,13 +3,13 @@ import type { Metadata } from "next";
 import { ChatView } from "@/components/chat/chat-view";
 import { NoAssistants } from "@/components/chat/no-assistants";
 import { getSession } from "@/server/auth/session";
-import { listAssistantsForUser } from "@/server/data/assistants";
+import { listMyAssistants } from "@/server/data/assistants";
 
 export const metadata: Metadata = { title: "Ny chatt" };
 
 export default async function NewChatPage({ searchParams }: PageProps<"/chat">) {
-  const { user } = await getSession();
-  const assistants = await listAssistantsForUser(user.id);
+  await getSession();
+  const assistants = await listMyAssistants();
   if (assistants.length === 0) return <NoAssistants />;
 
   const { assistant: slug } = await searchParams;

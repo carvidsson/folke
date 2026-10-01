@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import { ChatView } from "@/components/chat/chat-view";
 import { getSession } from "@/server/auth/session";
-import { listAssistantsForUser } from "@/server/data/assistants";
+import { listMyAssistants } from "@/server/data/assistants";
 import { getConversation } from "@/server/data/conversations";
 
 export async function generateMetadata({
@@ -19,7 +19,7 @@ export default async function ConversationPage({ params }: PageProps<"/chat/[con
   const { user } = await getSession();
   const [conversation, assistants] = await Promise.all([
     getConversation(user.id, conversationId),
-    listAssistantsForUser(user.id),
+    listMyAssistants(),
   ]);
   if (!conversation) notFound();
 

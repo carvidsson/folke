@@ -3,8 +3,8 @@ import type {
   AssistantStatus,
   DocumentFileType,
   DocumentProcessingState,
+  DocumentReviewStatus,
   DocumentValidity,
-  DocumentVisibility,
   Role,
   UserStatus,
 } from "./types";
@@ -45,9 +45,17 @@ export const VALIDITY_LABELS: Record<DocumentValidity, string> = {
 };
 
 export const PROCESSING_LABELS: Record<DocumentProcessingState, string> = {
-  ready: "Indexerad",
+  queued: "I kö",
   processing: "Bearbetas",
+  ready: "Indexerad",
   failed: "Fel vid bearbetning",
+};
+
+export const REVIEW_LABELS: Record<DocumentReviewStatus, string> = {
+  pending: "Väntar på granskning",
+  approved: "Godkänd",
+  rejected: "Avvisad",
+  archived: "Arkiverad",
 };
 
 export const FILE_TYPE_LABELS: Record<DocumentFileType, string> = {
@@ -56,17 +64,20 @@ export const FILE_TYPE_LABELS: Record<DocumentFileType, string> = {
   xlsx: "Excel",
   pptx: "PowerPoint",
   txt: "Text",
+  md: "Markdown",
+  csv: "CSV",
 };
 
-export function visibilityLabel(v: DocumentVisibility): string {
-  switch (v.type) {
-    case "organisation":
-      return "Alla med assistentåtkomst";
-    case "groups":
-      return v.groupIds.length === 1 ? "1 grupp" : `${v.groupIds.length} grupper`;
-    case "restricted":
-      return "Begränsad";
-  }
+/** Short description of who a document is shared with. */
+export function sharingLabel(
+  sharedGroupIds: string[],
+  groups: { id: string; name: string; system?: boolean }[],
+): string {
+  const shared = groups.filter((g) => sharedGroupIds.includes(g.id));
+  if (shared.some((g) => g.system)) return "Alla medarbetare";
+  if (shared.length === 0) return "Ej delad";
+  if (shared.length === 1) return shared[0].name;
+  return `${shared.length} grupper`;
 }
 
 export const CAPABILITY_LABELS: Record<Capability, string> = {
