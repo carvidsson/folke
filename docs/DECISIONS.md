@@ -232,6 +232,17 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 
 **Resultat (riktiga anrop, tre till fem körningar per fall):** inga källmarkörer i kundtexter (0/15 efter säkringen), "Underlag för medarbetaren" med källa i alla mejl, beräkningsmetod och rubriken Förslag i analyser. Kvarstår: flera kundmejl är neutralt formulerade utan "vi", men inget mejl omtalar Börjessons i tredje person.
 
+### ADR-041 – Personlig introduktion och Mina AI-inställningar (version 2)
+
+**Beslut:**
+- **Ingen ny datamodell.** `user_ai_preferences` och `profiles.onboarding_offered` från ADR-037 återanvänds. Svarsinställningar (svarslängd) hålls åtskilda från skrivinställningar (skrivstil, snabbval, egna önskemål, skrivexempel), som bara gäller texter Folke skriver åt användaren.
+- **Introduktionen** erbjuds bara om administratören valt det vid inbjudan (förvalt). Den är frivillig: "Kom igång", "Senare" (en cookie i tre dagar, sedan en påminnelse på startsidan) eller "Hoppa över". Val sparas efter varje steg, så användaren kan fortsätta senare. Befintliga användare erbjuds den inte, men alla kan starta den från Mina AI-inställningar.
+- **Fasta, statiska exempel** (`src/lib/onboarding/catalog.ts`). Mejlexemplet sätts ihop av delar, så att förhandsgranskningen reagerar direkt på skrivstil och snabbval utan AI-anrop.
+- **Valfritt AI-test** för användaren: sparade inställningar mot föreslagna, via samma jämförelsemotor som administrationen (`runSideBySideTest`). Samma modell, fråga och dokumentutdrag, med användarens egna behörigheter och budget. Ingen konversation sparas. Det tydliggörs att testet gör API-anrop.
+- **Konkreta formuleringar** för preferenserna, med exempel på hälsning, vi-form och ungefärlig längd för korta mejl. Mätningar med riktiga anrop visade att vaga formuleringar fick för liten effekt mot dina publicerade instruktioner.
+
+**Mätning (publicerade instruktioner, gpt-6-luna, tre körningar):** svarslängd kort, balanserat och utförligt gav 70, 82 och 120 ord. Formella kännetecken fanns i 3 av 3 formella mejl och i 0 av 3 personliga. "Håll mejl relativt korta" gav −17 %, och vi-form användes i 2 av 3 mejl. Eget önskemål följdes i 3 av 3. Obligatorisk struktur behölls i 3 av 3, och fientliga önskemål avvisades i 3 av 3.
+
 ---
 
 ## Öppna beslut

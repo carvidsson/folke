@@ -86,7 +86,7 @@ describe("personal instructions from preferences", () => {
     expect(lines[1]).toMatch(/e-postutkast och meddelanden, skriv personligt och naturligt/);
     expect(lines[1]).toMatch(/Faktasvar, villkor och analyser förblir sakliga/);
     expect(lines).toContain("Använd inga emojis.");
-    expect(lines).toContain("Håll e-postutkast kortfattade.");
+    expect(lines.some((l) => l.startsWith("Håll mejl och meddelanden relativt korta"))).toBe(true);
   });
 
   it("ignore unknown option values", () => {

@@ -22,7 +22,8 @@
 | Gemensamma instruktioner | Systemadministratörer och assistentansvariga | Systemadministratörer | – |
 | Instruktionshistorik | Systemadministratörer, ansvariga för respektive assistent | Endast triggers (vid publicering) | – |
 | Instruktionsutkast | De som får redigera respektive text | Samma, via `save_instruction_draft` och `publish_instruction_draft` med versionskontroll | Samma |
-| Personliga AI-preferenser | **Endast användaren själv** | Användaren själv (kontrollerade värden) | Användaren själv |
+| Personliga AI-preferenser | **Endast användaren själv** (inte administratörer) | Användaren själv (kontrollerade värden). Serveråtgärder använder sessionens användar-id, och RLS stoppar manipulerade anrop med annat id (testat live). | Användaren själv |
+| Erbjudande om introduktion (`onboarding_offered`) | Användaren själv och administratörer | Administratör vid inbjudan. Användare kan inte ändra det för andra. | – |
 | Assistentbehörighet | Admin, ansvariga och egna tilldelningar | Systemadministratör | Systemadministratör |
 | Dokument (metadata) | Uppladdaren, granskare för ägargruppen, admin, samt medlemmar i delade grupper efter godkännande | Uppladdare (admin, assistentansvarig eller gruppansvarig) till egna grupper | Granskare, samt uppladdaren före godkännande |
 | Granskningsbeslut | – | Admin och ansvariga för **ägargruppen** | – |
@@ -58,6 +59,7 @@
 | Kunduppgifter i pilot | Obligatoriskt intygande (`internal_only_attested_at`) och granskning före publicering. |
 | Förfalskad kostnad | `ai_usage` kan inte skrivas av användare. |
 | Intern information till OpenAI | Dataspärr i flera lager, se *Extern AI*. Varje lager testas för sig. |
+| AI-test av egna inställningar | Samma behörigheter, dokumentgodkännanden, spärr och budget som chatten. Ingen konversation sparas, och användaren jämför bara sina egna inställningar. |
 | Utkast som påverkar användare | Chatten läser bara publicerade texter. Publicering kräver ett aktivt val och stoppas vid konflikter. |
 | Två redigerare skriver över varandra | Optimistisk låsning i databasen: inaktuella versioner ger HTTP 409 och skrivs inte. |
 | AI-jämförelse som kringgår regler | Samma behörighetskontroll, samma spärr (endast godkända dokument, `assertExternalAllowed`), samma budget och gränser som chatten. Inga konversationer sparas, och preferenserna är fasta exempel. |

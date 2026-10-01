@@ -398,3 +398,44 @@ describe.skipIf(!isDevelopmentProject)("Instruction drafts (live, development pr
     expect(kept!.content).toBe("Administratör B:s ändring med tillräckligt lång text");
   });
 });
+
+describe.skipIf(!isDevelopmentProject)("Personal AI preferences (live, version 2)", () => {
+  let owner: LiveUser, other: LiveUser, admin: LiveUser;
+
+  beforeAll(async () => {
+    owner = await createUser("prefowner");
+    other = await createUser("prefother");
+    admin = await createUser("prefadmin", { role: "system_admin" });
+    const r = await owner.client
+      .from("user_ai_preferences")
+      .upsert({ user_id: owner.id, answer_length: "short", extra_notes: "Privat önskemål" }, { onConflict: "user_id" });
+    if (r.error) throw new Error(r.error.message);
+  });
+
+  afterAll(cleanup);
+
+  it("are invisible to other users and administrators", async () => {
+    for (const viewer of [other, admin]) {
+      const { data } = await viewer.client.from("user_ai_preferences").select("extra_notes").eq("user_id", owner.id);
+      expect(data ?? []).toEqual([]);
+    }
+  });
+
+  it("cannot be changed by others through manipulated API calls", async () => {
+    const upsert = await other.client
+      .from("user_ai_preferences")
+      .upsert({ user_id: owner.id, answer_length: "detailed" }, { onConflict: "user_id" });
+    expect(upsert.error).not.toBeNull();
+    const update = await other.client.from("user_ai_preferences").update({ answer_length: "detailed" }, { count: "exact" }).eq("user_id", owner.id);
+    expect(update.count ?? 0).toBe(0);
+    const del = await admin.client.from("user_ai_preferences").delete({ count: "exact" }).eq("user_id", owner.id);
+    expect(del.count ?? 0).toBe(0);
+    const { data } = await service().from("user_ai_preferences").select("answer_length, extra_notes").eq("user_id", owner.id).single();
+    expect(data).toEqual({ answer_length: "short", extra_notes: "Privat önskemål" });
+  });
+
+  it("users cannot offer the onboarding to someone else", async () => {
+    const { count } = await other.client.from("profiles").update({ onboarding_offered: true }, { count: "exact" }).eq("id", owner.id);
+    expect(count ?? 0).toBe(0);
+  });
+});

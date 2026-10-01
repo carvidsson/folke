@@ -104,6 +104,15 @@ async function answer(
   };
 }
 
+export interface SideBySideResult {
+  model: string;
+  basis: SourceReference[];
+  usedVectorSearch: boolean;
+  a: TestAnswer;
+  b: TestAnswer;
+}
+
+/** Administrators: published vs. draft instructions, with fixed example preferences. */
 export async function runInstructionTest(input: {
   userId: string;
   assistantId: string;
@@ -112,6 +121,32 @@ export async function runInstructionTest(input: {
   draft: Omit<InstructionLayers, "personal">;
   preferences: ExamplePreferences;
 }): Promise<{ ok: true; result: InstructionTestResult } | { ok: false; error: string }> {
+  const prefs = examplePreferences(input.preferences);
+  const personal = { personal: personalInstructions(prefs), personalReminder: personalReminder(prefs) };
+  const r = await runSideBySideTest({
+    userId: input.userId,
+    assistantId: input.assistantId,
+    question: input.question,
+    a: { ...input.published, ...personal },
+    b: { ...input.draft, ...personal },
+  });
+  if (!r.ok) return r;
+  const { a, b, ...rest } = r.result;
+  return { ok: true, result: { ...rest, published: a, draft: b } };
+}
+
+/**
+ * Two real answers to the same question with two sets of instruction layers
+ * (A and B): same model, one shared retrieval under the user's RLS (approved
+ * documents only), same limits and budget. No conversation is stored.
+ */
+export async function runSideBySideTest(input: {
+  userId: string;
+  assistantId: string;
+  question: string;
+  a: InstructionLayers;
+  b: InstructionLayers;
+}): Promise<{ ok: true; result: SideBySideResult } | { ok: false; error: string }> {
   if (!approvedDocumentsEnabled()) {
     return { ok: false, error: "OpenAI är inte aktiverat för godkända dokument i den här miljön." };
   }
@@ -159,11 +194,9 @@ export async function runInstructionTest(input: {
     return { ok: false, error: "Spärren stoppade testet." };
   }
 
-  const prefs = examplePreferences(input.preferences);
-  const personal = { personal: personalInstructions(prefs), personalReminder: personalReminder(prefs) };
-  const [published, draft] = await Promise.all([
-    answer(input.userId, input.assistantId, model, { ...input.published, ...personal }, context, sources, input.question, first.requestId),
-    answer(input.userId, input.assistantId, model, { ...input.draft, ...personal }, context, sources, input.question, second.requestId),
+  const [a, b] = await Promise.all([
+    answer(input.userId, input.assistantId, model, input.a, context, sources, input.question, first.requestId),
+    answer(input.userId, input.assistantId, model, input.b, context, sources, input.question, second.requestId),
   ]);
-  return { ok: true, result: { model, basis: sources, usedVectorSearch: Boolean(embedding), published, draft } };
+  return { ok: true, result: { model, basis: sources, usedVectorSearch: Boolean(embedding), a, b } };
 }

@@ -54,6 +54,8 @@ const inviteSchema = z.object({
   fullName: z.string().trim().min(2).max(120),
   role,
   groupIds: z.array(uuid).max(50),
+  /** Offer the optional personal onboarding at first sign-in. */
+  offerOnboarding: z.boolean().default(true),
 });
 
 export async function inviteUserAction(input: z.input<typeof inviteSchema>): Promise<ActionResult> {
@@ -78,7 +80,12 @@ export async function inviteUserAction(input: z.input<typeof inviteSchema>): Pro
   const supabase = await createSupabaseServerClient();
   const { error: profileError } = await supabase
     .from("profiles")
-    .update({ role: parsed.data.role, invited_by: session.user.id, full_name: fullName })
+    .update({
+      role: parsed.data.role,
+      invited_by: session.user.id,
+      full_name: fullName,
+      onboarding_offered: parsed.data.offerOnboarding,
+    })
     .eq("id", data.user.id);
   if (profileError) return fail(profileError, "Användaren bjöds in men rollen kunde inte sättas.");
 
@@ -93,7 +100,7 @@ export async function inviteUserAction(input: z.input<typeof inviteSchema>): Pro
     actorId: session.user.id,
     targetType: "profiles",
     targetId: data.user.id,
-    metadata: { role: parsed.data.role, groups: groupIds.length },
+    metadata: { role: parsed.data.role, groups: groupIds.length, onboarding: parsed.data.offerOnboarding },
   });
   refreshAdmin();
   return { ok: true, message: `En inbjudan har skickats till ${email}.` };

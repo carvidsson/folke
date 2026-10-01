@@ -48,7 +48,7 @@ export const MAX_WRITING_SAMPLE = 4000;
 export const ANSWER_LENGTH_LABELS: Record<AnswerLength, string> = {
   short: "Kort och direkt",
   balanced: "Balanserat",
-  detailed: "Utförligt och förklarande",
+  detailed: "Utförligt",
 };
 
 export const WRITING_TONE_LABELS: Record<WritingTone, string> = {
@@ -59,8 +59,8 @@ export const WRITING_TONE_LABELS: Record<WritingTone, string> = {
 
 export const WRITING_OPTION_LABELS: Record<WritingOption, string> = {
   no_emojis: "Undvik emojis",
-  no_long_dashes: "Undvik långa tankstreck",
-  we_form: "Skriv gärna i vi-form",
-  less_formal: "Undvik överdrivet formellt språk",
-  short_emails: "Håll e-postutkast kortfattade",
+  no_long_dashes: "Undvik onödiga tankstreck",
+  we_form: "Föredra vi-form i kundkommunikation",
+  short_emails: "Håll mejl relativt korta",
+  less_formal: "Undvik alltför formellt språk",
 };

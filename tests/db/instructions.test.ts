@@ -305,3 +305,41 @@ describe("conflict error code", () => {
     });
   });
 });
+
+describe("personal preferences via upsert (version 2 onboarding)", () => {
+  it("the owner can upsert their own row repeatedly", async () => {
+    await asUser(db, U.loner, async (tx) => {
+      const upsert = (length: string) =>
+        tx.query(
+          `insert into public.user_ai_preferences (user_id, answer_length) values ($1, $2)
+           on conflict (user_id) do update set answer_length = excluded.answer_length`,
+          [U.loner, length],
+        );
+      await upsert("short");
+      await upsert("detailed");
+      const { rows } = await tx.query<{ answer_length: string }>(`select answer_length from public.user_ai_preferences`);
+      expect(rows).toEqual([{ answer_length: "detailed" }]);
+    });
+  });
+
+  it("a manipulated upsert with another user's id is rejected", async () => {
+    await db.query(`insert into public.user_ai_preferences (user_id, answer_length) values ($1, 'short') on conflict do nothing`, [U.workshopManager]);
+    await asUser(db, U.seller, async (tx) => {
+      await expectDenied(
+        tx,
+        `insert into public.user_ai_preferences (user_id, answer_length) values ($1, 'detailed')
+         on conflict (user_id) do update set answer_length = excluded.answer_length`,
+        [U.workshopManager],
+      );
+    });
+    const { rows } = await db.query<{ answer_length: string }>(`select answer_length from public.user_ai_preferences where user_id = $1`, [U.workshopManager]);
+    expect(rows[0].answer_length).toBe("short");
+  });
+
+  it("users cannot change whether others are offered the onboarding", async () => {
+    await asUser(db, U.seller, async (tx) => {
+      const { rows } = await tx.query(`update public.profiles set onboarding_offered = true where id = $1 returning id`, [U.mechanic]);
+      expect(rows).toHaveLength(0);
+    });
+  });
+});

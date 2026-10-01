@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronsUpDown, LogOut, Settings, ShieldCheck } from "lucide-react";
+import { ChevronsUpDown, LogOut, Settings, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 
 import { UserAvatar } from "@/components/common/user-avatar";
@@ -45,6 +45,12 @@ export function UserMenu({ user }: { user: UserMenuUser }) {
             <Link href="/settings">
               <Settings />
               Inställningar
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href="/settings/ai">
+              <SlidersHorizontal />
+              Mina AI-inställningar
             </Link>
           </DropdownMenuItem>
           {user.canAdminister && (

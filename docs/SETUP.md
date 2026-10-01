@@ -260,6 +260,15 @@ Gäller utvecklingsprojektet med `FOLKE_AI_PROVIDER=openai` och `FOLKE_AI_EXTERN
 - **Kundtexter** (mejl, SMS) har inga källmarkörer i själva texten. Källor och kontrollpunkter visas efter texten under "Underlag för medarbetaren", och servern flyttar dit eventuella markörer som hamnat i kundtexten.
 - **Användarnas önskemål** (version 2) om längd, detaljnivå och ton går före allmänna stilanvisningar, men aldrig före uppdrag, obligatoriska format, regler, fakta, källkrav eller behörigheter. Undvik därför ord om svarslängd ("kortfattat", "utförligt") i assistentinstruktionerna, om de inte är ett obligatoriskt format.
 
+### Personlig introduktion och Mina AI-inställningar (version 2)
+
+- **Inbjudan:** "Erbjud personlig introduktion" är förvalt i inbjudningsdialogen. Användaren möter introduktionen vid första inloggningen och kan välja **Kom igång**, **Senare** (då visas en påminnelse på startsidan) eller **Hoppa över**.
+- **Introduktionen:** tre steg med färdiga exempel (svarslängd, skrivstil för mejl, snabbval och egna önskemål) och en valfri kort introduktion till Folke. Valen sparas efter varje steg.
+- **Mina AI-inställningar** finns i användarmenyn och under Inställningar. Där kan användaren se och ändra valen, återställa till standard och starta introduktionen igen. Exemplen uppdateras direkt utan AI-anrop.
+- **Testa med riktig AI** (frivilligt, när OpenAI är aktiverat) jämför sparade inställningar med valen på sidan. Testet gör två anrop och räknas mot användarens budget.
+- **Prioritet:** inställningarna gäller bara användaren själv och kan aldrig åsidosätta Folkes fasta regler, assistentens uppdrag, obligatoriska format, behörigheter, källkrav eller fakta.
+- **Test:** `node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.eval.config.mts tests/ai-eval/personal.eval.ts` (riktiga anrop, syntetiska dokument).
+
 ### Chatthistorik
 
 - **Byt namn** och **Ta bort konversation** finns i menyn (⋯) i chattens huvud.

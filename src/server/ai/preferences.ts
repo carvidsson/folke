@@ -20,23 +20,28 @@ import {
 const ANSWER_LENGTH: Record<AnswerLength, string> = {
   short:
     "Svara kort och direkt: högst två till tre meningar eller en kort punktlista med det viktigaste. Utelämna bakgrund som inte efterfrågas.",
-  balanced: "Svara balanserat: kärnan först och sedan det viktigaste sammanhanget i några stycken.",
+  balanced:
+    "Svara balanserat: kärnan först och sedan det viktigaste sammanhanget, normalt i ett till tre korta stycken eller en kort punktlista. Utelämna detaljer som inte behövs för frågan.",
   detailed:
     "Svara utförligt och förklarande, även om instruktionerna ovan ber om kortfattade svar: ge kärnan först och gå sedan igenom varje relevant villkor, belopp, undantag och steg i källorna, med förklaring av vad det betyder i praktiken. Använd gärna rubriker eller punktlistor. Lägg aldrig till information som inte stöds av källorna.",
 };
 
 const WRITING_TONE: Record<WritingTone, string> = {
-  professional: "sakligt och professionellt",
-  personal: "personligt och naturligt",
-  formal: "mer formellt",
+  professional: "sakligt och professionellt: tydligt, vänligt och rakt på sak",
+  personal:
+    'personligt och naturligt: varmt och vardagligt, som till någon du känner, till exempel med hälsningen "Hej Anna!" och avslutningen "Vänliga hälsningar"',
+  formal:
+    'mer formellt: hövligt och korrekt, med en formell hälsning som "Bästa Anna," och avslutningen "Med vänlig hälsning", utan vardagliga uttryck. Det valet gäller före allmänna råd om att undvika formellt språk',
 };
 
 const WRITING_OPTION: Record<WritingOption, string> = {
   no_emojis: "Använd inga emojis.",
-  no_long_dashes: "Undvik långa tankstreck (– och —).",
-  we_form: "Skriv gärna i vi-form i texter för användarens räkning.",
-  less_formal: "Undvik överdrivet formellt språk.",
-  short_emails: "Håll e-postutkast kortfattade.",
+  no_long_dashes: "Undvik onödiga tankstreck (– och —). Använd punkt, komma eller kolon i stället.",
+  we_form:
+    'Skriv i vi-form i kundkommunikation och andra texter som skrivs för användarens räkning, till exempel "vi hjälper dig gärna" och "hos oss". Skriv inte om företaget i tredje person.',
+  less_formal: "Undvik alltför formellt språk.",
+  short_emails:
+    "Håll mejl och meddelanden relativt korta, ungefär 60 till 100 ord: det viktigaste först, utan detaljer som mottagaren inte har frågat efter. Erbjud hellre att berätta mer.",
 };
 
 /** Free text is quoted and cannot open new prompt sections or source tags. */

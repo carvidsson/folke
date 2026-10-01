@@ -1,5 +1,7 @@
-import { ArrowRight, ArrowUpRight, FileText, MessageSquare } from "lucide-react";
+import { ArrowRight, ArrowUpRight, FileText, MessageSquare, Sparkles } from "lucide-react";
+import { cookies } from "next/headers";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { EmptyState } from "@/components/common/empty-state";
@@ -7,13 +9,34 @@ import { QuickStart } from "@/components/home/quick-start";
 import { ValidityBadge } from "@/components/knowledge/document-badges";
 import { PageContainer } from "@/components/layout/page-header";
 import { firstName, formatRelative, formatShortDate } from "@/lib/format";
+import { ONBOARDING_LATER_COOKIE } from "@/lib/onboarding/constants";
 import { getSession } from "@/server/auth/session";
 import { listMyAssistants } from "@/server/data/assistants";
 import { listConversations } from "@/server/data/conversations";
 import { listDocuments } from "@/server/data/documents";
+import { getMyAIPreferences } from "@/server/data/instructions";
+import { createSupabaseServerClient } from "@/server/supabase/server";
+
+/**
+ * Whether the optional onboarding is pending: offered at invitation and
+ * neither completed nor skipped. Returns "show" (first visit), "remind"
+ * (postponed with "Senare") or null.
+ */
+async function onboardingState(userId: string): Promise<"show" | "remind" | null> {
+  const supabase = await createSupabaseServerClient();
+  const [{ data: profile }, prefs, jar] = await Promise.all([
+    supabase.from("profiles").select("onboarding_offered").eq("id", userId).maybeSingle<{ onboarding_offered: boolean }>(),
+    getMyAIPreferences(userId),
+    cookies(),
+  ]);
+  if (!profile?.onboarding_offered || (prefs && prefs.onboardingStatus !== "not_started")) return null;
+  return jar.has(ONBOARDING_LATER_COOKIE) ? "remind" : "show";
+}
 
 export default async function HomePage() {
   const { user } = await getSession();
+  const onboarding = await onboardingState(user.id);
+  if (onboarding === "show") redirect("/onboarding");
   const [assistants, recent, documents] = await Promise.all([
     listMyAssistants(),
     listConversations(user.id, { limit: 5 }),
@@ -39,6 +62,19 @@ export default async function HomePage() {
           Välj en assistent och beskriv vad du behöver hjälp med.
         </p>
         <QuickStart assistants={assistants} />
+        {onboarding === "remind" && (
+          <Link
+            href="/onboarding"
+            className="mt-6 flex items-center gap-3 rounded-xl border bg-brand-subtle/50 px-4 py-3 text-sm transition-colors hover:border-brand"
+          >
+            <Sparkles className="size-4 shrink-0 text-brand-foreground" />
+            <span className="flex-1">
+              <span className="font-medium">Anpassa Folke efter dig.</span>{" "}
+              <span className="text-muted-foreground">Välj hur du vill få svar och hur Folke ska skriva åt dig. Det tar en minut.</span>
+            </span>
+            <ArrowRight className="size-4 shrink-0" />
+          </Link>
+        )}
       </section>
 
       <section className="mt-12">

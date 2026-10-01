@@ -1,6 +1,7 @@
 "use client";
 
-import { KeyRound, LogOut, MonitorSmartphone, Smartphone } from "lucide-react";
+import { KeyRound, LogOut, MonitorSmartphone, SlidersHorizontal, Smartphone } from "lucide-react";
+import Link from "next/link";
 import { useId, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -32,7 +33,18 @@ export interface SecurityInfo {
 export function SettingsView({ user, security }: { user: ProfileUser; security: SecurityInfo }) {
   return (
     <PageContainer width="narrow">
-      <PageHeader title="Inställningar" description="Din profil och dina säkerhetsinställningar." />
+      <PageHeader
+        title="Inställningar"
+        description="Din profil och dina säkerhetsinställningar."
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/settings/ai">
+              <SlidersHorizontal />
+              Mina AI-inställningar
+            </Link>
+          </Button>
+        }
+      />
 
       <Tabs defaultValue="profile" className="mt-8 gap-6">
         <TabsList variant="line" className="w-full justify-start gap-4 border-b pb-0 [&>button]:flex-none [&>button]:px-0.5">

@@ -38,6 +38,7 @@ export function InviteUserDialog({
   const id = useId();
   const [role, setRole] = useState<Role>("employee");
   const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [offerOnboarding, setOfferOnboarding] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -45,6 +46,7 @@ export function InviteUserDialog({
     onOpenChange(false);
     setRole("employee");
     setGroupIds([]);
+    setOfferOnboarding(true);
     setError(null);
   }
 
@@ -71,6 +73,7 @@ export function InviteUserDialog({
                 fullName: String(form.get("fullName") ?? ""),
                 role,
                 groupIds,
+                offerOnboarding,
               });
               if (result.ok) {
                 toast.success(result.message);
@@ -129,6 +132,15 @@ export function InviteUserDialog({
               {groups.length === 0 && <p className="text-caption">Inga grupper ännu.</p>}
             </div>
           </fieldset>
+          <label className="flex items-start gap-2.5 rounded-lg border p-3 text-sm">
+            <Checkbox checked={offerOnboarding} onCheckedChange={(c) => setOfferOnboarding(c === true)} className="mt-0.5" />
+            <span>
+              <span className="block font-medium">Erbjud personlig introduktion</span>
+              <span className="block text-caption">
+                Frivillig. Användaren väljer hur Folke ska svara och skriva. Roller, grupper och behörigheter bestämmer du.
+              </span>
+            </span>
+          </label>
         </form>
 
         <DialogFooter>

@@ -75,8 +75,21 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Justerade instruktioner för Sälj (vi-form, källor i kundtexter) och Analys (beräkningar, Förslag) | ✅ Publicerade via utkast |
 | **Version 1 av AI-instruktionssystemet** | ✅ Klar |
 
+## Version 2: personlig introduktion och Mina AI-inställningar (utvecklad i folke-dev, granskas)
+
+| Del | Status |
+|---|---|
+| Val vid inbjudan, frivillig introduktion (Kom igång, Senare, Hoppa över) | ✅ |
+| Svarslängd och skrivstil via färdiga exempel, snabbval, egna önskemål och skrivexempel | ✅ |
+| Direkt förhandsgranskning utan AI-anrop | ✅ |
+| Mina AI-inställningar: ändra, återställ, starta om introduktionen | ✅ |
+| Valfritt AI-test: sparade mot föreslagna inställningar | ✅ |
+| Kort introduktion till Folke | ✅ |
+| Effekt och säkerhet mätt med riktiga anrop (ADR-041) | ✅ |
+
 ## Senare
 
+- **Versionshistorik:** bevara publicerarens namn även när användarkontot tas bort (i dag blir det "Folke"). Mindre förbättring som inte ska försena introduktionen.
 - Kontrollerad webbsökning (de fasta reglerna är förberedda, men ingen sökning är byggd eller aktiverad).
 
 ## Version 2 – exempelbaserad introduktion (planerad)

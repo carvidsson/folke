@@ -122,6 +122,10 @@ Godkännande för OpenAI (ADR-036): `setDocumentAIApprovalAction` anropar `set_d
 
 Att byta leverantör innebär en ny modul i `providers/` och ett nytt kostnadsavsnitt i katalogen. Allt ovanför gränssnittet är leverantörsneutralt. Att byta OpenAI-projekt (till exempel till Börjessons företagsprojekt) kräver bara nya miljövariabler.
 
+## Personliga AI-inställningar
+
+`/onboarding` (frivillig introduktion) och `/settings/ai` (Mina AI-inställningar) skriver till `user_ai_preferences` via `src/server/account/ai-preferences-actions.ts`, med användarens egen klient. Startsidan visar introduktionen när `onboarding_offered` är satt och status är `not_started`. Exemplen och förhandsgranskningen är statiska (`src/lib/onboarding/catalog.ts`, `src/components/ai-settings/pickers.tsx`). Chatten läser preferenserna per begäran och omvandlar dem med `personalInstructions()` och `personalReminder()`. AI-testet använder `runSideBySideTest()`.
+
 ## Administration
 
 **AI-instruktioner** (`/admin/instructions`): utkast och publicering (`save_instruction_draft`, `publish_instruction_draft` med optimistisk låsning), versionshistorik, förhandsgranskning och jämförelse med OpenAI (`src/server/ai/instruction-test.ts`: en hämtning, två anrop, ingen konversation, `ai_usage.purpose = instruction_test`). De fasta reglerna visas skrivskyddade. Promptens ordning är: gemensamma instruktioner → assistentens instruktioner → regler → användarens önskemål → källor → påminnelse om svarslängd.
