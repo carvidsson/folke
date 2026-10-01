@@ -46,6 +46,8 @@ const ACTION_LABELS: Record<string, [string, StatusTone]> = {
   "ai.synthetic_corpus_loaded": ["Syntetiska testdokument inlästa", "info"],
   "ai.synthetic_corpus_removed": ["Syntetiska testdokument borttagna", "info"],
   "ai.embeddings_indexed": ["Embeddings skapade (syntetiska)", "info"],
+  "ai.document_approved": ["Dokument godkänt för OpenAI", "warning"],
+  "ai.document_revoked": ["Godkännande för OpenAI återkallat", "info"],
   "conversations.purge": ["Gallring av konversationer", "warning"],
 };
 

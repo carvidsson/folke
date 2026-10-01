@@ -122,6 +122,10 @@ describe("sessions (real Supabase Auth)", () => {
 });
 
 describe("documents and search", () => {
+  // The project may contain other documents (e.g. shared with "Alla medarbetare");
+  // assertions only consider documents this run created.
+  const ours = (ids: string[]) => ids.filter((id) => Object.values(docs).some((d) => d.id === id));
+
   it("members see approved documents of their groups only", async () => {
     const ids = (await memberA.client.from("documents").select("id")).data!.map((d) => d.id);
     expect(ids).toContain(docs.approved.id);
@@ -129,15 +133,16 @@ describe("documents and search", () => {
     expect(ids).not.toContain(docs.pending.id);
     expect(ids).not.toContain(docs.groupB.id);
     const idsB = (await memberB.client.from("documents").select("id")).data!.map((d) => d.id);
-    expect(idsB).toEqual([docs.groupB.id]);
+    expect(ours(idsB)).toEqual([docs.groupB.id]);
   });
 
   it("search returns only approved, valid documents via a granted assistant, with a focused snippet", async () => {
     const { data, error } = await search(memberA, sales, "Vad är kodordet för projekt Aurora?");
     expect(error).toBeNull();
-    expect(data![0].document_id).toBe(docs.approved.id);
-    expect(data![0].snippet).toContain("Blå Ekorre");
-    expect(data![0].snippet.startsWith("Bakgrund")).toBe(false);
+    const top = (data as { document_id: string; snippet: string }[]).find((r) => ours([r.document_id]).length)!;
+    expect(top.document_id).toBe(docs.approved.id);
+    expect(top.snippet).toContain("Blå Ekorre");
+    expect(top.snippet.startsWith("Bakgrund")).toBe(false);
 
     const zebra = (await search(memberA, sales, "kampanjvillkor Zebra")).data!.map((r: { document_id: string }) => r.document_id);
     expect(zebra).not.toContain(docs.pending.id);
@@ -147,9 +152,11 @@ describe("documents and search", () => {
   });
 
   it("does not leak across groups or assistants", async () => {
-    expect((await search(memberA, warranty, "laddkabel Zebra")).data ?? []).toHaveLength(0);
-    expect((await search(memberA, analysis, "Aurora")).data ?? []).toHaveLength(0);
-    expect((await search(memberB, sales, "Aurora")).data ?? []).toHaveLength(0);
+    const found = async (...args: Parameters<typeof search>) =>
+      ours(((await search(...args)).data ?? []).map((r: { document_id: string }) => r.document_id));
+    expect(await found(memberA, warranty, "laddkabel Zebra")).toHaveLength(0);
+    expect(await found(memberA, analysis, "Aurora")).toHaveLength(0);
+    expect(await found(memberB, sales, "Aurora")).toHaveLength(0);
     // Even calling the function directly with another user's document terms.
     const b = (await search(memberB, warranty, "Aurora kodordet")).data ?? [];
     expect(b.map((r: { document_id: string }) => r.document_id)).not.toContain(docs.approved.id);

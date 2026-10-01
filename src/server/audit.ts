@@ -32,7 +32,9 @@ export type SecurityEvent =
   | "ai.test_access_changed"
   | "ai.synthetic_corpus_loaded"
   | "ai.synthetic_corpus_removed"
-  | "ai.embeddings_indexed";
+  | "ai.embeddings_indexed"
+  | "ai.document_approved"
+  | "ai.document_revoked";
 
 export async function logSecurityEvent(
   action: SecurityEvent,

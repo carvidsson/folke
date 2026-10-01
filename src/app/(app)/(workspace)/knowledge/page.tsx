@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { KnowledgeView } from "@/components/knowledge/knowledge-view";
+import { approvedDocumentsEnabled } from "@/server/ai/guard";
 import { getSession } from "@/server/auth/session";
 import { listAssistants, listCollections } from "@/server/data/assistants";
 import { listDocuments } from "@/server/data/documents";
@@ -40,6 +41,7 @@ export default async function KnowledgePage({ searchParams }: PageProps<"/knowle
       canUpload={canUpload && ownerGroups.length > 0}
       reviewableGroupIds={managed.map((g) => g.id)}
       isAdmin={isAdmin}
+      aiEnabled={approvedDocumentsEnabled()}
       currentUserId={user.id}
       initialDocumentId={typeof document === "string" ? document : null}
     />

@@ -2,6 +2,8 @@ import "server-only";
 
 import { documentValidity } from "@/lib/domain/access";
 import type {
+  DocumentAIDataClass,
+  DocumentAIIndexStatus,
   DocumentFileType,
   DocumentProcessingState,
   DocumentReviewStatus,
@@ -18,12 +20,15 @@ export type KnowledgeDocumentView = KnowledgeDocument & {
   uploadedByName: string;
   reviewedByName: string | null;
   reviewedAt: string | null;
+  aiApprovedByName: string | null;
 };
 
 const DOCUMENT_COLUMNS = `
   id, title, file_name, file_type, size_bytes, collection_id, owner_group_id, uploaded_by,
   review_status, review_comment, reviewed_at, processing_status, processing_error, page_count,
   valid_from, valid_until, tags, created_at,
+  ai_data_class, ai_index_status, ai_index_error, ai_approved_at,
+  ai_approver:profiles!documents_ai_approved_by_fkey(full_name, email),
   uploader:profiles!documents_uploaded_by_fkey(full_name, email),
   reviewer:profiles!documents_reviewed_by_fkey(full_name, email),
   document_shares(group_id),
@@ -49,6 +54,11 @@ interface DocumentRow {
   valid_until: string | null;
   tags: string[];
   created_at: string;
+  ai_data_class: DocumentAIDataClass;
+  ai_index_status: DocumentAIIndexStatus;
+  ai_index_error: string | null;
+  ai_approved_at: string | null;
+  ai_approver: { full_name: string; email: string } | null;
   uploader: { full_name: string; email: string } | null;
   reviewer: { full_name: string; email: string } | null;
   document_shares: { group_id: string }[];
@@ -76,6 +86,10 @@ function toView(row: DocumentRow, now: Date): KnowledgeDocumentView {
     processing: row.processing_status,
     processingError: row.processing_error,
     pageCount: row.page_count,
+    aiDataClass: row.ai_data_class,
+    aiIndexStatus: row.ai_index_status,
+    aiIndexError: row.ai_index_error,
+    aiApprovedAt: row.ai_approved_at,
   };
   return {
     ...doc,
@@ -83,6 +97,7 @@ function toView(row: DocumentRow, now: Date): KnowledgeDocumentView {
     uploadedByName: row.uploader?.full_name || row.uploader?.email || "Okänd",
     reviewedByName: row.reviewer ? row.reviewer.full_name || row.reviewer.email : null,
     reviewedAt: row.reviewed_at,
+    aiApprovedByName: row.ai_approver ? row.ai_approver.full_name || row.ai_approver.email : null,
   };
 }
 

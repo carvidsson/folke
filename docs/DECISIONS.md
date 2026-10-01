@@ -189,6 +189,12 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 **Beslut:** `ai_usage` registrerar typ (chatt eller embedding), tokens, cachade tokens, kostnad i USD (och SEK enligt kurs i miljön) samt om värdena är uppskattade. `ai_begin_request` kontrollerar atomiskt budget per användare och dag, månadsbudget, samtidighet och frågor per minut innan ett externt anrop görs.
 **Motiv:** OpenAI-projektets budget är ingen garanterad hård gräns. Ett pågående anrop kan överskrida gränsen marginellt, men det begränsas av `max_output_tokens`.
 
+### ADR-036 – Godkännande per dokument för OpenAI
+
+**Beslut:** Christoffer beslutade 2026-10-01 att riktiga verksamhetsdokument ska kunna användas med OpenAI i folke-dev, efter uttryckligt godkännande per dokument. Dataklassen `approved` aktiveras. En systemadministratör godkänner eller återkallar ett dokument i taget via `public.set_document_ai_approval`, som loggas. Godkännandet är avstängt som standard, och klassen kan inte ändras på annat sätt, inte ens med servernyckeln. Policyn `FOLKE_AI_EXTERNAL_DATA=approved-documents` låter vanliga konversationer använda OpenAI med enbart godkända dokument. Hämtningen filtrerar på klassen vid varje fråga, så en återkallelse gäller nästa anrop, och embeddings tas bort i samma transaktion. Tidigare svar som byggde på dokument som inte längre är godkända skickas inte med i historiken. Inga användaridentifierare skickas till OpenAI (`safety_identifier` togs bort).
+**Motiv:** Kontrollerad användning av riktiga dokument, där varje dokument är ett medvetet beslut och kan återkallas omedelbart. Pilotprojektet förblir i mockläge.
+**Kvar:** avtalsfrågorna i SECURITY.md gäller fortfarande innan detta används i produktion.
+
 ---
 
 ## Öppna beslut

@@ -45,6 +45,7 @@ export async function recordEmbeddingUsage(input: {
   conversationId?: string | null;
   model: string;
   tokens: number;
+  dataClass: "internal" | "synthetic";
 }) {
   const costUsd = embeddingCostUsd(input.model, input.tokens);
   const { error } = await createSupabaseAdminClient()
@@ -61,7 +62,7 @@ export async function recordEmbeddingUsage(input: {
       cost_usd: costUsd,
       cost_sek: usdToSek(costUsd),
       estimated: false,
-      data_class: "synthetic",
+      data_class: input.dataClass,
     });
   if (error) console.error("[ai/usage] could not record embedding usage", error.message);
 }

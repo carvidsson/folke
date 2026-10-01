@@ -5,10 +5,12 @@ import { resetServerEnvForTests } from "@/server/env";
 import { verifyCitations } from "./citations";
 import {
   DataGuardError,
+  approvedDocumentsEnabled,
   assertEmbeddable,
   assertExternalAllowed,
   chooseProviderId,
   externalProviderConfigured,
+  historyAllowedClasses,
   retrievalDataClass,
 } from "./guard";
 import { allowedChatModels, isAllowedChatModel, resolveChatModel } from "./models";
@@ -38,11 +40,25 @@ describe("provider routing (data guard)", () => {
     expect(chooseProviderId({ conversationClass: "synthetic", userHasTestAccess: true })).toBe("mock");
   });
 
-  it("uses OpenAI only for synthetic conversations of users with test access", () => {
+  it("with synthetic-only, uses OpenAI only for synthetic conversations of test users", () => {
     setEnv(openAIOn);
+    expect(approvedDocumentsEnabled()).toBe(false);
     expect(chooseProviderId({ conversationClass: "synthetic", userHasTestAccess: true })).toBe("openai");
     expect(chooseProviderId({ conversationClass: "internal", userHasTestAccess: true })).toBe("mock");
     expect(chooseProviderId({ conversationClass: "synthetic", userHasTestAccess: false })).toBe("mock");
+  });
+
+  it("with approved-documents, ordinary conversations use OpenAI for everyone", () => {
+    setEnv({ ...openAIOn, FOLKE_AI_EXTERNAL_DATA: "approved-documents" });
+    expect(chooseProviderId({ conversationClass: "internal", userHasTestAccess: false })).toBe("openai");
+    // Synthetic test conversations still require test access.
+    expect(chooseProviderId({ conversationClass: "synthetic", userHasTestAccess: false })).toBe("mock");
+    expect(chooseProviderId({ conversationClass: "synthetic", userHasTestAccess: true })).toBe("openai");
+  });
+
+  it("approved-documents has no effect without the OpenAI provider", () => {
+    setEnv({ FOLKE_AI_EXTERNAL_DATA: "approved-documents", OPENAI_API_KEY: "test-placeholder-not-a-key" });
+    expect(chooseProviderId({ conversationClass: "internal", userHasTestAccess: true })).toBe("mock");
   });
 
   it("needs a key to be considered configured", () => {
@@ -51,7 +67,7 @@ describe("provider routing (data guard)", () => {
     expect(chooseProviderId({ conversationClass: "synthetic", userHasTestAccess: true })).toBe("mock");
   });
 
-  it("rejects any external data policy other than synthetic-only", () => {
+  it("rejects unknown external data policies", () => {
     setEnv({ ...openAIOn, FOLKE_AI_EXTERNAL_DATA: "all" });
     expect(() => externalProviderConfigured()).toThrow(/FOLKE_AI_EXTERNAL_DATA/);
   });
@@ -76,14 +92,19 @@ describe("provider routing (data guard)", () => {
     expect(message).not.toContain("secret-proxy");
   });
 
-  it("restricts synthetic conversations to synthetic documents", () => {
-    expect(retrievalDataClass("synthetic")).toBe("synthetic");
-    expect(retrievalDataClass("internal")).toBeNull();
+  it("retrieves only the allowed class for external calls", () => {
+    expect(retrievalDataClass("synthetic", true)).toBe("synthetic");
+    expect(retrievalDataClass("synthetic", false)).toBe("synthetic");
+    expect(retrievalDataClass("internal", true)).toBe("approved");
+    expect(retrievalDataClass("internal", false)).toBeNull();
+    expect(historyAllowedClasses("internal", true)).toEqual(["approved"]);
+    expect(historyAllowedClasses("internal", false)).toBeNull();
   });
 });
 
 describe("final check before external calls", () => {
   const ok = { external: true, conversationClass: "synthetic" as const, userHasTestAccess: true };
+  beforeEach(() => setEnv(openAIOn));
 
   it("allows synthetic context in synthetic conversations", () => {
     expect(() => assertExternalAllowed({ ...ok, context: [{ dataClass: "synthetic" }] })).not.toThrow();
@@ -93,11 +114,28 @@ describe("final check before external calls", () => {
   it.each([
     ["internal document in context", { ...ok, context: [{ dataClass: "synthetic" }, { dataClass: "internal" }] }],
     ["document without class", { ...ok, context: [{}] }],
-    ["approved class (not activated)", { ...ok, context: [{ dataClass: "approved" }] }],
-    ["internal conversation", { ...ok, conversationClass: "internal" as const, context: [] }],
+    ["approved document in a synthetic conversation", { ...ok, context: [{ dataClass: "approved" }] }],
+    ["internal conversation under synthetic-only", { ...ok, conversationClass: "internal" as const, context: [] }],
     ["user without test access", { ...ok, userHasTestAccess: false, context: [] }],
   ])("blocks %s", (_label, input) => {
     expect(() => assertExternalAllowed(input as Parameters<typeof assertExternalAllowed>[0])).toThrow(DataGuardError);
+  });
+
+  it("allows ordinary conversations with approved documents only (approved-documents)", () => {
+    setEnv({ ...openAIOn, FOLKE_AI_EXTERNAL_DATA: "approved-documents" });
+    const base = { external: true, conversationClass: "internal" as const, userHasTestAccess: false };
+    expect(() => assertExternalAllowed({ ...base, context: [{ dataClass: "approved" }, { dataClass: "approved" }] })).not.toThrow();
+    expect(() => assertExternalAllowed({ ...base, context: [] })).not.toThrow();
+    for (const bad of ["internal", "synthetic", undefined] as const) {
+      expect(() => assertExternalAllowed({ ...base, context: [{ dataClass: "approved" }, { dataClass: bad }] })).toThrow(
+        DataGuardError,
+      );
+    }
+  });
+
+  it("blocks everything when OpenAI is not configured", () => {
+    setEnv({ FOLKE_AI_PROVIDER: "mock" });
+    expect(() => assertExternalAllowed({ ...ok, context: [] })).toThrow(DataGuardError);
   });
 
   it("does not restrict the mock provider", () => {
@@ -106,8 +144,8 @@ describe("final check before external calls", () => {
     ).not.toThrow();
   });
 
-  it("only embeds synthetic documents", () => {
-    expect(() => assertEmbeddable([{ ai_data_class: "synthetic" }])).not.toThrow();
+  it("only embeds synthetic or approved documents", () => {
+    expect(() => assertEmbeddable([{ ai_data_class: "synthetic" }, { ai_data_class: "approved" }])).not.toThrow();
     expect(() => assertEmbeddable([{ ai_data_class: "synthetic" }, { ai_data_class: "internal" }])).toThrow(DataGuardError);
   });
 });

@@ -17,6 +17,8 @@ import type { AIProvider, ChatCompletionInput, ProviderEvent, UsageReport } from
  *   NOT the same as Zero Data Retention (abuse monitoring logs may still be
  *   kept by OpenAI, see docs/SECURITY.md).
  * - No tools, no file uploads, no vector stores: only text in, text out.
+ * - No user identifiers, names or e-mail addresses are sent (no
+ *   safety_identifier, no metadata).
  * - No automatic retries (maxRetries 0) to keep cost and duplicates under
  *   control; the user retries explicitly.
  * - This module never decides WHAT may be sent. The caller must run the
@@ -83,7 +85,7 @@ export const openAIProvider: AIProvider = {
   id: "openai",
   external: true,
 
-  async *streamChat({ system, messages, model: requested, safetyIdentifier, signal, onUsage }: ChatCompletionInput) {
+  async *streamChat({ system, messages, model: requested, signal, onUsage }: ChatCompletionInput) {
     const model = resolveChatModel(requested);
     const env = serverEnv();
     let usage: UsageReport | null = null;
@@ -101,7 +103,6 @@ export const openAIProvider: AIProvider = {
           store: false,
           max_output_tokens: env.FOLKE_AI_MAX_OUTPUT_TOKENS,
           reasoning: model.reasoningEffort === "none" ? undefined : { effort: model.reasoningEffort },
-          safety_identifier: safetyIdentifier,
         },
         { signal },
       );

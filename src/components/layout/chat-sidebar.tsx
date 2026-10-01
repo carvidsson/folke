@@ -1,4 +1,4 @@
-import { House, Library, SquarePen } from "lucide-react";
+import { History, House, Library, SquarePen } from "lucide-react";
 import Link from "next/link";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
@@ -52,6 +52,10 @@ export function ChatSidebar({
           <SidebarNavLink href="/knowledge">
             <Library />
             Kunskapsbank
+          </SidebarNavLink>
+          <SidebarNavLink href="/chat/history">
+            <History />
+            Alla konversationer
           </SidebarNavLink>
         </SidebarSection>
 

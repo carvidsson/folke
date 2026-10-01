@@ -8,7 +8,7 @@
 4. **Konversationer är privata.** Det finns ingen policy som ger administratörer läsrätt.
 5. **Explicita behörigheter.** API-rollerna får bara de tabell- och kolumnbehörigheter de behöver (`20261001120000_api_grants.sql`). `anon` får inga. RLS avgör vilka rader som nås.
 6. **Ingen innehållsloggning.** Säkerhetsloggen och kostnadsloggen innehåller aldrig konversations- eller dokumentinnehåll.
-7. **Ingen intern information till extern AI.** Endast syntetiska testdata får skickas till OpenAI. Spärren avgörs på servern och i databasen, aldrig av klienten (se *Extern AI*).
+7. **Extern AI bara med godkända data.** Till OpenAI skickas bara dokument som en systemadministratör har godkänt ett i taget (folke-dev, ADR-036) och syntetiska testdata. Spärren avgörs på servern och i databasen, aldrig av klienten (se *Extern AI*).
 
 ## Behörighetsmatris
 
@@ -26,11 +26,13 @@
 | Filer (Storage) | Signerad länk (60 s) efter RLS-kontroll | Engångs-URL för uppladdning efter RLS-kontrollerad insert | Servern |
 | Konversationer, meddelanden | **Endast ägaren** | Ägaren (bara med tilldelad assistent). Meddelanden kan inte ändras. | Ägaren. Gallring via admin, endast efter ≥ 12 månaders inaktivitet. |
 | Kostnadslogg | Egna rader, admin allt | Endast servern | – |
-| Dataklass för dokument (`ai_data_class`) | Som dokumentet | Endast servern vid skapande. Kan **aldrig** ändras, inte ens av servern. | – |
+| Dataklass för dokument (`ai_data_class`) | Som dokumentet | `internal ↔ approved` endast via `set_document_ai_approval` (systemadministratör, loggas). `synthetic` endast av servern vid skapande. Kan inte ändras direkt, inte ens med servernyckeln. | – |
+| Indexeringsstatus (`ai_index_status`) | Som dokumentet | Endast servern och godkännandefunktionen | – |
 | AI-testbehörighet (`ai_test_access`) | Som profilen | Endast systemadministratör, via servern. Loggas. | – |
 | Dataklass för konversation (`data_class`) | Ägaren | `synthetic` kräver AI-testbehörighet. Kan inte ändras. | – |
 | Modellval per assistent (`ai_model`) | Behöriga användare | Endast systemadministratör, via servern, kontrollerat mot modellkatalogen. Loggas. | – |
-| Embeddings | Som textbitarna | Endast servern, och bara för syntetiska dokument (trigger) | Kaskad |
+| Embeddings | Som textbitarna | Endast servern, och bara för godkända eller syntetiska dokument (trigger) | Vid återkallelse och kaskad |
+| Konversationens namn | Ägaren | Endast ägaren | Ägaren (även flera åt gången) |
 | Anropslogg för AI (`ai_requests`) | Endast servern | Endast servern | Servern |
 | Säkerhetslogg | Systemadministratör | Triggers och servern | Ingen |
 
@@ -89,7 +91,7 @@ Begränsning: Supabase Auth, Storage och PostgREST körs inte i PGlite. Därför
 
 ## Extern AI (OpenAI)
 
-**Policy (ADR-031):** befintliga och uppladdade dokument och konversationer är **inte** godkända för extern AI-behandling. Bara särskilt markerade syntetiska testdokument och syntetiska testkonversationer får skickas till OpenAI, och det gäller både embeddings och svar. Policyn gäller tills leverantörsavtal och behandling av Börjessons interna information är godkända.
+**Policy (ADR-031, ADR-036):** inga dokument är godkända för extern AI-behandling som standard. I folke-dev (`approved-documents`) får en systemadministratör godkänna enskilda dokument. Då skickas deras utdrag och embeddings, samt frågor och svar i vanliga konversationer, till OpenAI. Ej godkända dokument skickas aldrig. Pilotprojektet är i mockläge. Syntetiska testdata används för automatiserade tester.
 
 ### Spärren i lager
 
@@ -97,19 +99,20 @@ Begränsning: Supabase Auth, Storage och PostgREST körs inte i PGlite. Därför
 |---|---|
 | `FOLKE_AI_PROVIDER` (server) | Standard är `mock`, så inga externa anrop görs alls. Pilotprojektet körs i mockläge. |
 | `FOLKE_AI_EXTERNAL_DATA=synthetic-only` | Det enda tillåtna värdet. Allt annat stoppar uppstarten av AI-funktionen. |
-| `documents.ai_data_class` | Standard är `internal`. Bara servern kan skapa `synthetic`. Klassen kan aldrig ändras, så befintliga dokument kan inte bli tillåtna genom ändrad metadata. `approved` är reserverad och nekas. |
+| `documents.ai_data_class` | Standard är `internal`. `approved` sätts bara via godkännandefunktionen (systemadministratör), aldrig genom ändrad metadata. Återkallelse tar bort embeddings. `synthetic` sätts bara av servern. |
 | `profiles.ai_test_access` | Bara systemadministratören kan ge behörigheten, via servern, och ändringen loggas. Användare kan inte ge sig själva den. |
 | `conversations.data_class` | En syntetisk konversation kan bara skapas med AI-testbehörighet (RLS) och kan aldrig ändras. Vanliga konversationer besvaras alltid i mockläge. |
-| Hämtning | Syntetiska konversationer hämtar **bara** syntetiska dokument, och RLS gäller som vanligt (grupp, assistent, granskning, giltighet). |
-| Slutkontroll före anrop (`assertExternalAllowed`) | Avbryter om konversationen inte är syntetisk, om behörigheten saknas eller om något utdrag inte är syntetiskt |
-| Trigger på `document_chunks` | Embeddings kan bara sparas för syntetiska dokument, även med servernyckeln |
+| Hämtning | Vanliga konversationer med OpenAI hämtar **bara** godkända dokument, och syntetiska konversationer bara syntetiska. Klassen kontrolleras vid varje fråga. RLS gäller som vanligt (grupp, assistent, granskning, giltighet). |
+| Historik | Tidigare svar skickas bara med om deras källdokument fortfarande är läsbara och godkända |
+| Slutkontroll före anrop (`assertExternalAllowed`) | Avbryter om policyn inte tillåter konversationstypen eller om något utdrag har fel klass |
+| Trigger på `document_chunks` | Embeddings kan bara sparas för godkända eller syntetiska dokument, även med servernyckeln |
 
 Användarens egen text i en syntetisk konversation kan tekniskt sett innehålla vad som helst. Därför ges testbehörighet bara till utsedda testare, och gränssnittet varnar tydligt: "Skriv inte in verklig information".
 
 ### Anropen
 
 - OpenAI:s officiella SDK och Responses API med strömning, `store: false` och `max_output_tokens`. Inga verktyg, ingen filuppladdning och inga vector stores. Dokument och vektorer lagras bara i Supabase.
-- `safety_identifier` är en pseudonym hash av användar-id, inte e-post eller namn.
+- Inga användaridentifierare skickas: ingen `safety_identifier`, inga namn, e-postadresser, id:n eller metadata. Utdrag skickas med titel och sida.
 - `maxRetries: 0` och tidsgräns 45 sekunder. Fel visas på svenska utan leverantörens feltext. En fråga som misslyckas tas bort, så att ett nytt försök inte ger dubbla meddelanden.
 - Endast endpoints `api.openai.com` och `eu.api.openai.com` accepteras. Den senare används bara om projektet har godkänd EU-dataresidens.
 
@@ -123,11 +126,11 @@ Användarens egen text i en syntetisk konversation kan tekniskt sett innehålla 
 | Underbiträden och tredjelandsöverföring | Öppen |
 | Loggning och lagring hos OpenAI: `store: false` är **inte** Zero Data Retention. Standard för missbruksövervakning är upp till 30 dagar. ZDR eller Modified Abuse Monitoring kräver godkännande. | Öppen |
 | Att API-data inte används för träning (enligt OpenAI:s villkor) bekräftas i avtalet | Öppen |
-| Beslut om vilka dokumentkategorier som får behandlas (aktiverar `approved`) | Förberett i databasen, inte aktiverat |
+| Beslut om vilka dokument som får behandlas | Aktiverat i folke-dev som godkännande per dokument (ADR-036). Pilotprojektet: ej aktiverat. |
 
-### Framtida godkännandeflöde (förberett, inte aktiverat)
+### Godkännandeflöde (ADR-036)
 
-Dataklassen `approved` finns i schemat men nekas av triggern. När avtalen är godkända behövs: en migration som tillåter `internal → approved` endast via en godkännandefunktion för systemadministratörer (med loggning och motivering), utökad hämtning och embeddings för `approved` samt en ny `FOLKE_AI_EXTERNAL_DATA`-policy. Inget av detta kan aktiveras genom konfiguration.
+`public.set_document_ai_approval(dokument, true/false)` är den enda vägen mellan `internal` och `approved`. Funktionen kräver systemadministratör, kräver att texten är inläst, loggas i säkerhetsloggen och tar bort embeddings vid återkallelse. Testat i PGlite, live och i webbläsaren.
 
 ## Granskning 2026-10-01
 

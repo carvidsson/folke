@@ -162,7 +162,6 @@ describe("Swedish quality evaluation (real OpenAI, synthetic data)", () => {
             messages: [{ role: "user", content: c.question }],
             context,
             model: model.id,
-            safetyIdentifier: "folke-eval",
             onUsage: (u) => (report = u),
           })) {
             answer += e.delta;

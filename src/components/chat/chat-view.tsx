@@ -1,10 +1,9 @@
 "use client";
 
-import { ArrowDown, CircleAlert, Menu, MoreHorizontal, RotateCcw, SquarePen, Trash2 } from "lucide-react";
+import { ArrowDown, CircleAlert, Menu, MoreHorizontal, Pencil, RotateCcw, SquarePen, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
-import { toast } from "sonner";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -21,10 +20,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { takePendingPrompt } from "@/lib/chat/pending-prompt";
 import type { Assistant, ConversationDataClass, Message } from "@/lib/domain/types";
-import { deleteConversationAction } from "@/server/chat/actions";
 
 import { AssistantPicker } from "./assistant-picker";
 import { Composer } from "./composer";
+import { DeleteConversationsDialog, RenameConversationDialog } from "./conversation-dialogs";
 import { AssistantMessage, UserMessage } from "./message";
 import { useChat } from "./use-chat";
 
@@ -198,21 +197,8 @@ function ChatHeader({
 }) {
   const { sidebarVisible, openMobileNav } = useShell();
   const router = useRouter();
-  const [deleting, startDelete] = useTransition();
-
-  function remove() {
-    if (!conversationId) return;
-    if (!window.confirm("Ta bort konversationen? Det går inte att ångra.")) return;
-    startDelete(async () => {
-      const result = await deleteConversationAction(conversationId);
-      if (result.ok) {
-        toast.success(result.message);
-        router.push("/chat");
-      } else {
-        toast.error(result.error);
-      }
-    });
-  }
+  const [renaming, setRenaming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-1 px-2 sm:px-3">
@@ -242,17 +228,35 @@ function ChatHeader({
         {conversationId && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Fler alternativ för konversationen" disabled={deleting}>
+              <Button variant="ghost" size="icon" aria-label="Fler alternativ för konversationen">
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem variant="destructive" onSelect={remove}>
+              <DropdownMenuItem onSelect={() => setRenaming(true)}>
+                <Pencil />
+                Byt namn
+              </DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
                 <Trash2 />
                 Ta bort konversation
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+        )}
+        {conversationId && (
+          <>
+            <RenameConversationDialog
+              conversation={renaming ? { id: conversationId, title: title ?? "" } : null}
+              onOpenChange={setRenaming}
+              onRenamed={() => router.refresh()}
+            />
+            <DeleteConversationsDialog
+              conversationIds={deleting ? [conversationId] : null}
+              onOpenChange={setDeleting}
+              onDeleted={() => router.push("/chat")}
+            />
+          </>
         )}
         <Button asChild variant="ghost" size="icon" className={sidebarVisible ? "lg:hidden" : undefined}>
           <Link href="/chat" aria-label="Ny chatt">

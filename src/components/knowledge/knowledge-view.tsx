@@ -35,7 +35,7 @@ import type {
 import { formatCalendarDate, formatShortDate } from "@/lib/format";
 import type { KnowledgeDocumentView } from "@/server/data/documents";
 
-import { ProcessingBadge, ReviewBadge, ValidityBadge } from "./document-badges";
+import { AIBadge, ProcessingBadge, ReviewBadge, ValidityBadge } from "./document-badges";
 import { DocumentIcon } from "./document-icon";
 import { DocumentSheet } from "./document-sheet";
 import { UploadDialog } from "./upload-dialog";
@@ -52,6 +52,7 @@ export function KnowledgeView({
   canUpload,
   reviewableGroupIds,
   isAdmin,
+  aiEnabled,
   currentUserId,
   initialDocumentId,
 }: {
@@ -65,6 +66,8 @@ export function KnowledgeView({
   /** Groups whose documents the user reviews (managers). */
   reviewableGroupIds: string[];
   isAdmin: boolean;
+  /** OpenAI is enabled for approved documents. */
+  aiEnabled: boolean;
   currentUserId: string;
   initialDocumentId: string | null;
 }) {
@@ -283,6 +286,9 @@ export function KnowledgeView({
                       ) : (
                         <ValidityBadge validity={d.validity} />
                       )}
+                      {(aiEnabled || d.aiDataClass !== "internal") && (
+                        <AIBadge dataClass={d.aiDataClass} indexStatus={d.aiIndexStatus} />
+                      )}
                       <span className="text-xs text-muted-foreground">
                         {d.validUntil
                           ? `t.o.m. ${formatCalendarDate(d.validUntil)}`
@@ -311,6 +317,8 @@ export function KnowledgeView({
         groups={groups}
         canReview={openDocument ? canReview(openDocument) : false}
         canDelete={openDocument ? canDelete(openDocument) : false}
+        isAdmin={isAdmin}
+        aiEnabled={aiEnabled}
       />
       {canUpload && (
         <UploadDialog

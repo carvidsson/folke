@@ -1,11 +1,15 @@
-import { createHash } from "node:crypto";
-
 import { chatRequestSchema, type ChatStreamEvent } from "@/lib/chat/protocol";
 import { getAIProvider } from "@/server/ai";
 import { verifyCitations } from "@/server/ai/citations";
 import { embedQuery } from "@/server/ai/embeddings";
 import { userMessageFor } from "@/server/ai/errors";
-import { assertExternalAllowed, chooseProviderId, retrievalDataClass, type ConversationDataClass } from "@/server/ai/guard";
+import {
+  assertExternalAllowed,
+  chooseProviderId,
+  historyAllowedClasses,
+  retrievalDataClass,
+  type ConversationDataClass,
+} from "@/server/ai/guard";
 import { beginAIRequest, finishAIRequest } from "@/server/ai/limits";
 import { resolveChatModel } from "@/server/ai/models";
 import { buildSystemPrompt, limitHistory, titleFromMessage } from "@/server/ai/prompt";
@@ -23,10 +27,12 @@ import { createSupabaseServerClient } from "@/server/supabase/server";
  * verified sources. Every read and write of conversations and documents goes
  * through the user's own Supabase client, so RLS applies.
  *
- * External AI (OpenAI) is used only when the data guard allows it: a
- * synthetic conversation of a user with AI test access, retrieving only
- * synthetic documents (src/server/ai/guard.ts). Everything else uses the
- * mock provider, which makes no external calls.
+ * External AI (OpenAI) is used only when the data guard allows it
+ * (src/server/ai/guard.ts): ordinary conversations with documents a system
+ * administrator approved for OpenAI (policy "approved-documents"), and
+ * synthetic test conversations with synthetic documents. Everything else
+ * uses the mock provider, which makes no external calls. No user names,
+ * e-mail addresses or ids are sent to the provider.
  */
 
 const HISTORY_ROWS = 30;
@@ -36,11 +42,6 @@ export const maxDuration = 60;
 
 function jsonError(message: string, status: number) {
   return Response.json({ error: message }, { status });
-}
-
-/** Pseudonymous, stable user reference for the vendor's abuse detection. */
-function safetyIdentifier(userId: string) {
-  return createHash("sha256").update(`folke:${userId}`).digest("hex").slice(0, 32);
 }
 
 export async function POST(request: Request) {
@@ -135,7 +136,11 @@ export async function POST(request: Request) {
 
   // --- Retrieval and history (both under the user's RLS) -------------------
   const queryEmbedding = provider.external
-    ? await embedQuery(message.content, { userId, assistantId: assistant.id, conversationId: conversation.id }, request.signal)
+    ? await embedQuery(
+        message.content,
+        { userId, assistantId: assistant.id, conversationId: conversation.id, dataClass: conversation.data_class },
+        request.signal,
+      )
     : null;
 
   const [{ data: historyRows }, { data: chunkRows }] = await Promise.all([
@@ -151,17 +156,23 @@ export async function POST(request: Request) {
       p_query: message.content,
       p_embedding: queryEmbedding?.vector ?? null,
       p_embedding_model: queryEmbedding?.model ?? null,
-      p_data_class: retrievalDataClass(conversation.data_class),
+      p_data_class: retrievalDataClass(conversation.data_class, provider.external),
       p_limit: CONTEXT_LIMIT,
     }),
   ]);
 
   const rows = (historyRows ?? []).reverse();
   const referenced = [...new Set(rows.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
+  // Earlier answers are only sent again while their documents are still
+  // readable – and, for external calls, still approved (revocation).
   const { data: readable } = referenced.length
-    ? await supabase.from("documents").select("id").in("id", referenced)
+    ? await supabase.from("documents").select("id, ai_data_class").in("id", referenced)
     : { data: [] };
-  const history = limitHistory(filterHistory(rows, new Set((readable ?? []).map((d: { id: string }) => d.id))));
+  const allowedClasses = historyAllowedClasses(conversation.data_class, provider.external);
+  const usable = ((readable ?? []) as { id: string; ai_data_class: string }[]).filter(
+    (d) => !allowedClasses || (allowedClasses as string[]).includes(d.ai_data_class),
+  );
+  const history = limitHistory(filterHistory(rows, new Set(usable.map((d) => d.id))));
   const { context, sources } = toContext((chunkRows ?? []) as SearchRow[]);
 
   const instructions = await getInstructionsForAuthorizedChat(assistant.id);
@@ -205,7 +216,6 @@ export async function POST(request: Request) {
           messages: history,
           context,
           model: model?.id,
-          safetyIdentifier: safetyIdentifier(userId),
           signal: request.signal,
           onUsage: (u) => (usage = u),
         })) {

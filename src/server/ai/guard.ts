@@ -5,22 +5,29 @@ import { serverEnv } from "@/server/env";
 import type { ContextChunk } from "./types";
 
 /**
- * External data guard (ADR-031).
+ * External data guard (ADR-031, ADR-036).
  *
- * Until a vendor agreement covers Börjessons' internal information, ONLY
- * synthetic test data may be sent to an external AI provider – for answers
- * and for embeddings. The decision is made here, on the server, from data
- * users cannot change:
- *   - conversations.data_class (set at creation, immutable; 'synthetic'
- *     requires profiles.ai_test_access, enforced by RLS),
- *   - profiles.ai_test_access (set by system administrators via the server),
- *   - documents.ai_data_class (set by the server, immutable; enforced by
- *     database triggers),
- *   - server environment (FOLKE_AI_PROVIDER, FOLKE_AI_EXTERNAL_DATA).
- * The database adds independent checks (embedding trigger, insert policy).
+ * Decides what may be sent to the external AI provider, on the server, from
+ * data users cannot change:
+ *   - server environment: FOLKE_AI_PROVIDER and FOLKE_AI_EXTERNAL_DATA,
+ *   - documents.ai_data_class: 'internal' (default, never sent),
+ *     'approved' (approved one by one by a system administrator, revocable),
+ *     'synthetic' (fictional test data) – enforced by database triggers,
+ *   - conversations.data_class: 'synthetic' test conversations (requires
+ *     AI test access, immutable) or ordinary 'internal' conversations,
+ *   - profiles.ai_test_access (system administrators only).
+ *
+ * Policies:
+ *   synthetic-only      → only synthetic conversations of test users use
+ *                         OpenAI, with synthetic documents only.
+ *   approved-documents  → additionally, ordinary conversations use OpenAI
+ *                         with approved documents only.
+ * The database adds independent checks (class trigger, embedding trigger,
+ * approval function, RLS on every retrieved row).
  */
 
 export type ConversationDataClass = "internal" | "synthetic";
+export type DocumentDataClass = "internal" | "synthetic" | "approved";
 
 export class DataGuardError extends Error {
   constructor(reason: string) {
@@ -35,26 +42,43 @@ export interface RoutingInput {
   userHasTestAccess: boolean;
 }
 
-/** Whether OpenAI is configured at all (provider + key + policy). */
+/** Whether OpenAI is configured at all (provider + key). */
 export function externalProviderConfigured(): boolean {
   const env = serverEnv();
-  return env.FOLKE_AI_PROVIDER === "openai" && Boolean(env.OPENAI_API_KEY) && env.FOLKE_AI_EXTERNAL_DATA === "synthetic-only";
+  return env.FOLKE_AI_PROVIDER === "openai" && Boolean(env.OPENAI_API_KEY);
+}
+
+/** Whether ordinary conversations may use OpenAI with approved documents. */
+export function approvedDocumentsEnabled(): boolean {
+  return externalProviderConfigured() && serverEnv().FOLKE_AI_EXTERNAL_DATA === "approved-documents";
 }
 
 /** Which provider a chat turn may use. Anything not explicitly allowed is mock. */
 export function chooseProviderId({ conversationClass, userHasTestAccess }: RoutingInput): "mock" | "openai" {
   if (!externalProviderConfigured()) return "mock";
-  if (conversationClass !== "synthetic") return "mock";
-  if (!userHasTestAccess) return "mock";
-  return "openai";
+  if (conversationClass === "synthetic") return userHasTestAccess ? "openai" : "mock";
+  return approvedDocumentsEnabled() ? "openai" : "mock";
+}
+
+/** The only document class an external call may use for this conversation. */
+function allowedExternalClass(conversationClass: ConversationDataClass): DocumentDataClass {
+  return conversationClass === "synthetic" ? "synthetic" : "approved";
 }
 
 /**
- * Which documents a conversation may retrieve from. Synthetic conversations
- * only see synthetic documents, whichever provider answers.
+ * Which documents a conversation may retrieve from (null = all the user may
+ * read, only for the mock provider). External calls retrieve only the
+ * allowed class, filtered in the database at query time – so a revoked
+ * document is excluded from the very next call.
  */
-export function retrievalDataClass(conversationClass: ConversationDataClass): "synthetic" | null {
-  return conversationClass === "synthetic" ? "synthetic" : null;
+export function retrievalDataClass(conversationClass: ConversationDataClass, external: boolean): DocumentDataClass | null {
+  if (conversationClass === "synthetic") return "synthetic";
+  return external ? "approved" : null;
+}
+
+/** Document classes whose earlier answers may be sent again as history. */
+export function historyAllowedClasses(conversationClass: ConversationDataClass, external: boolean): DocumentDataClass[] | null {
+  return external ? [allowedExternalClass(conversationClass)] : null;
 }
 
 /**
@@ -68,19 +92,21 @@ export function assertExternalAllowed(input: {
   context: Pick<ContextChunk, "dataClass">[];
 }) {
   if (!input.external) return;
-  if (serverEnv().FOLKE_AI_EXTERNAL_DATA !== "synthetic-only") {
-    throw new DataGuardError("unsupported external data policy");
+  if (!externalProviderConfigured()) throw new DataGuardError("external provider not configured");
+  if (input.conversationClass === "synthetic") {
+    if (!input.userHasTestAccess) throw new DataGuardError("user lacks AI test access");
+  } else if (!approvedDocumentsEnabled()) {
+    throw new DataGuardError("ordinary conversations are not enabled for the external provider");
   }
-  if (input.conversationClass !== "synthetic") throw new DataGuardError("conversation is not synthetic");
-  if (!input.userHasTestAccess) throw new DataGuardError("user lacks AI test access");
-  if (input.context.some((c) => c.dataClass !== "synthetic")) {
-    throw new DataGuardError("context contains non-synthetic documents");
+  const allowed = allowedExternalClass(input.conversationClass);
+  if (input.context.some((c) => c.dataClass !== allowed)) {
+    throw new DataGuardError(`context contains documents that are not ${allowed}`);
   }
 }
 
-/** Embeddings may only be created for synthetic documents. */
+/** Embeddings may only be created for synthetic or approved documents. */
 export function assertEmbeddable(documents: { ai_data_class: string }[]) {
-  if (documents.some((d) => d.ai_data_class !== "synthetic")) {
-    throw new DataGuardError("embedding requested for non-synthetic documents");
+  if (documents.some((d) => d.ai_data_class !== "synthetic" && d.ai_data_class !== "approved")) {
+    throw new DataGuardError("embedding requested for documents that are not approved");
   }
 }

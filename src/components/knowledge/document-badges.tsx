@@ -1,6 +1,12 @@
 import { StatusBadge, type StatusTone } from "@/components/common/status-badge";
 import { PROCESSING_LABELS, REVIEW_LABELS, VALIDITY_LABELS } from "@/lib/domain/labels";
-import type { DocumentProcessingState, DocumentReviewStatus, DocumentValidity } from "@/lib/domain/types";
+import type {
+  DocumentAIDataClass,
+  DocumentAIIndexStatus,
+  DocumentProcessingState,
+  DocumentReviewStatus,
+  DocumentValidity,
+} from "@/lib/domain/types";
 
 const VALIDITY_TONES: Record<DocumentValidity, StatusTone> = {
   valid: "success",
@@ -43,4 +49,19 @@ const REVIEW_TONES: Record<DocumentReviewStatus, StatusTone> = {
 
 export function ReviewBadge({ status }: { status: DocumentReviewStatus }) {
   return <StatusBadge tone={REVIEW_TONES[status]}>{REVIEW_LABELS[status]}</StatusBadge>;
+}
+
+/** Whether the document may be used by OpenAI, and its indexing state. */
+export function AIBadge({
+  dataClass,
+  indexStatus,
+}: {
+  dataClass: DocumentAIDataClass;
+  indexStatus: DocumentAIIndexStatus;
+}) {
+  if (dataClass === "synthetic") return <StatusBadge tone="neutral">Syntetiskt test</StatusBadge>;
+  if (dataClass === "internal") return <StatusBadge tone="neutral">OpenAI: ej godkänt</StatusBadge>;
+  if (indexStatus === "failed") return <StatusBadge tone="danger">OpenAI: indexeringsfel</StatusBadge>;
+  if (indexStatus === "ready") return <StatusBadge tone="success">OpenAI: godkänt</StatusBadge>;
+  return <StatusBadge tone="info">OpenAI: indexeras</StatusBadge>;
 }

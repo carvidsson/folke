@@ -44,6 +44,17 @@ Detaljerad verifiering finns i [SETUP.md](SETUP.md#2-verifierat-mot-den-riktiga-
 
 Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 
+## Riktiga dokument med OpenAI i folke-dev ✅ verifierat 2026-10-01
+
+| Del | Status |
+|---|---|
+| Godkännande per dokument, återkallelse och indexeringsstatus (ADR-036) | ✅ PGlite, live och webbläsare |
+| Vanliga konversationer med OpenAI och godkända dokument, utan val av läge för användaren | ✅ |
+| Källhänvisning till rätt dokument och sida | ✅ |
+| Ändra assistenter för ett befintligt dokument | ✅ |
+| Chatthistorik: byt namn, radera en eller flera med bekräftelse | ✅ |
+| Pilotprojektet | Oförändrat (mockläge) |
+
 ## Senare
 
 - Godkännandeflöde för extern AI-behandling av interna dokument (förberett i schemat, ADR-031), när avtalen är klara.
@@ -52,7 +63,6 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 - Redigering av metadata och delning för befintliga dokument (i dag: ta bort och ladda upp på nytt).
 - Påminnelser om dokument som snart går ut. Versionshantering av dokument.
 - OCR för skannade PDF:er.
-- Byte av namn på konversationer (borttagning finns).
 - Rate limiting av chatt i mockläge och larm på säkerhetshändelser (externa AI-anrop är begränsade sedan MVP 0.3).
 - Automatiska E2E-tester (Playwright) mot ett separat Supabase-testprojekt, där webbläsarverifieringen från 2026-10-01 blir en permanent svit.
 - Eventuellt SSO mot Microsoft Entra ID.
@@ -62,7 +72,6 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 
 | Område | Var i koden | Status |
 |---|---|---|
-| AI-svar för intern information | `src/server/ai/guard.ts` | Mockläge. OpenAI bara för syntetiska testkonversationer. |
-| Embeddings för interna dokument | `src/server/ai/test-data.ts`, trigger i databasen | Spärrat. Bara syntetiska dokument indexeras. |
+| AI-svar med interna dokument | `src/server/ai/guard.ts` | folke-dev: OpenAI med dokument som godkänts ett i taget. Pilot: mockläge. |
 | Filbilagor i chatt | `components/chat/composer.tsx` | Avstängt i chattvyn |
 | Tidsbegränsning av sessioner i Auth | Supabase Dashboard | Kräver Pro. Upprätthålls redan av appen och databasen. |

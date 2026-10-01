@@ -50,7 +50,6 @@ async function run(input: Partial<Parameters<typeof openAIProvider.streamChat>[0
       messages: [{ role: "user", content: "Hur lång är garantin på laddkabeln?" }],
       context: [],
       model: "gpt-6-luna",
-      safetyIdentifier: "abc",
       onUsage: (u) => reports.push(u),
       ...input,
     })) {
@@ -85,10 +84,12 @@ describe("OpenAI provider request", () => {
       max_output_tokens: 1200,
       instructions: "Systemprompt med syntetiska källor",
       input: [{ role: "user", content: "Hur lång är garantin på laddkabeln?" }],
-      safety_identifier: "abc",
     });
     expect(capture.params).not.toHaveProperty("temperature");
     expect(capture.params).not.toHaveProperty("tools");
+    expect(capture.params).not.toHaveProperty("safety_identifier");
+    expect(capture.params).not.toHaveProperty("user");
+    expect(capture.params).not.toHaveProperty("metadata");
     expect(capture.params).not.toHaveProperty("previous_response_id");
   });
 

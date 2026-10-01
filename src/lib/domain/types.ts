@@ -142,7 +142,15 @@ export interface KnowledgeDocument {
   processing: DocumentProcessingState;
   processingError: string | null;
   pageCount: number | null;
+  /** "approved" = approved for OpenAI by a system administrator (revocable). */
+  aiDataClass: DocumentAIDataClass;
+  aiIndexStatus: DocumentAIIndexStatus;
+  aiIndexError: string | null;
+  aiApprovedAt: Timestamp | null;
 }
+
+export type DocumentAIDataClass = "internal" | "approved" | "synthetic";
+export type DocumentAIIndexStatus = "none" | "pending" | "indexing" | "ready" | "failed";
 
 // ---------------------------------------------------------------------------
 // Conversations

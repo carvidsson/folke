@@ -77,7 +77,7 @@ describe.skipIf(!isDevelopmentProject)("AI data guard (live, development project
       .from("document_chunks")
       .update({ embedding: vec(1), embedding_model: MODEL })
       .eq("document_id", internalDoc.id);
-    expect(error?.message).toMatch(/syntetiska/);
+    expect(error?.message).toMatch(/godkända för OpenAI/);
   });
 
   it("users cannot grant themselves AI test access", async () => {
@@ -173,5 +173,115 @@ describe.skipIf(!isDevelopmentProject)("AI data guard (live, development project
       .update({ ai_model: "gpt-6-astra" }, { count: "exact" })
       .eq("id", warranty);
     expect(error !== null || count === 0).toBe(true);
+  });
+});
+
+describe.skipIf(!isDevelopmentProject)("Per-document approval for OpenAI (live, development project)", () => {
+  let admin: LiveUser, member: LiveUser, outsider: LiveUser;
+  let group: string, otherGroup: string, sales: string;
+  let doc: { id: string }, otherDoc: { id: string };
+
+  beforeAll(async () => {
+    sales = await assistantId("salj");
+    group = await createGroup("AIgodk");
+    otherGroup = await createGroup("AIannan");
+    admin = await createUser("aiapprover", { role: "system_admin" });
+    member = await createUser("aimember");
+    outsider = await createUser("aioutsider2");
+    const svc = service();
+    await svc.from("group_members").insert([
+      { group_id: group, user_id: member.id, is_manager: false },
+      { group_id: otherGroup, user_id: outsider.id, is_manager: false },
+    ]);
+    await svc.from("assistant_grants").insert([
+      { assistant_id: sales, group_id: group },
+      { assistant_id: sales, group_id: otherGroup },
+    ]);
+    doc = await createDocument({
+      ownerGroupId: group,
+      uploadedBy: admin.id,
+      assistantIds: [sales],
+      title: "godkänd",
+      chunks: ["Prislista Kvarnhjul: modellen kostar 123 456 kr."],
+    });
+    otherDoc = await createDocument({
+      ownerGroupId: group,
+      uploadedBy: admin.id,
+      assistantIds: [sales],
+      title: "ej godkänd",
+      chunks: ["Hemlig Kvarnhjul-bilaga: rabatt 9 procent."],
+    });
+  });
+
+  afterAll(cleanup);
+
+  const searchApproved = (client: LiveUser["client"]) =>
+    client
+      .rpc("search_document_chunks_hybrid", {
+        p_assistant_id: sales,
+        p_query: "Kvarnhjul",
+        p_embedding: null,
+        p_embedding_model: null,
+        p_data_class: "approved",
+        p_limit: 6,
+      })
+      .then((r) => ((r.data ?? []) as { document_id: string }[]).map((x) => x.document_id));
+
+  it("is off by default", async () => {
+    const { data } = await service().from("documents").select("ai_data_class").in("id", [doc.id, otherDoc.id]);
+    expect(data?.map((d) => d.ai_data_class)).toEqual(["internal", "internal"]);
+    expect(await searchApproved(member.client)).toEqual([]);
+  });
+
+  it("only system administrators can approve", async () => {
+    const { error } = await member.client.rpc("set_document_ai_approval", { p_document_id: doc.id, p_approved: true });
+    expect(error?.message).toMatch(/systemadministratörer/);
+    const direct = await admin.client.from("documents").update({ ai_data_class: "approved" }).eq("id", doc.id).select("id");
+    expect(direct.error).not.toBeNull();
+  });
+
+  it("an approved document is used, unapproved and other groups' documents are not", async () => {
+    const { data, error } = await admin.client.rpc("set_document_ai_approval", { p_document_id: doc.id, p_approved: true });
+    expect(error).toBeNull();
+    expect(data).toBe("approved");
+    const ids = await searchApproved(member.client);
+    expect(ids).toEqual([doc.id]);
+    expect(ids).not.toContain(otherDoc.id);
+    // Same assistant, other group: the approved document stays invisible.
+    expect(await searchApproved(outsider.client)).toEqual([]);
+    const { data: row } = await service().from("documents").select("ai_index_status, ai_approved_by").eq("id", doc.id).single();
+    expect(row).toEqual({ ai_index_status: "pending", ai_approved_by: admin.id });
+  });
+
+  it("embeddings are accepted only while approved", async () => {
+    const svc = service();
+    const ok = await svc.from("document_chunks").update({ embedding: vec(3), embedding_model: MODEL, embedded_at: new Date().toISOString() }).eq("document_id", doc.id);
+    expect(ok.error).toBeNull();
+    const denied = await svc.from("document_chunks").update({ embedding: vec(3), embedding_model: MODEL }).eq("document_id", otherDoc.id);
+    expect(denied.error?.message).toMatch(/godkända för OpenAI/);
+  });
+
+  it("revocation takes effect immediately and removes embeddings", async () => {
+    const { error } = await admin.client.rpc("set_document_ai_approval", { p_document_id: doc.id, p_approved: false });
+    expect(error).toBeNull();
+    expect(await searchApproved(member.client)).toEqual([]);
+    const { count } = await service()
+      .from("document_chunks")
+      .select("id", { count: "exact", head: true })
+      .eq("document_id", doc.id)
+      .not("embedding", "is", null);
+    expect(count).toBe(0);
+  });
+
+  it("conversations can only be renamed and deleted by their owner", async () => {
+    const { data: conv } = await member.client.from("conversations").insert({ assistant_id: sales, title: "Min" }).select("id").single();
+    const hijack = await outsider.client.from("conversations").update({ title: "Kapad" }, { count: "exact" }).eq("id", conv!.id);
+    expect(hijack.count ?? 0).toBe(0);
+    const adminDelete = await admin.client.from("conversations").delete({ count: "exact" }).eq("id", conv!.id);
+    expect(adminDelete.count ?? 0).toBe(0);
+    const rename = await member.client.from("conversations").update({ title: "Nytt namn" }, { count: "exact" }).eq("id", conv!.id);
+    expect(rename.count).toBe(1);
+    const del = await member.client.from("conversations").delete({ count: "exact" }).in("id", [conv!.id]);
+    expect(del.count).toBe(1);
   });
 });

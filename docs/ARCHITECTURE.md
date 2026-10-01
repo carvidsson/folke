@@ -85,7 +85,7 @@ Inbjudan/återställning: e-postlänk ──► /auth/confirm (token_hash) ─�
 2. Zod-validering. Klienten skickar **bara det nya meddelandet**, eftersom historiken läses från databasen.
 3. `getMyAssistant()` → 403 och en säkerhetshändelse om assistenten inte är tilldelad.
 4. Konversationen skapas eller hämtas (RLS: endast ägaren). En ny konversation får dataklassen `synthetic` bara om klienten begär det **och** användaren har AI-testbehörighet. Annars blir den `internal`.
-5. **Val av leverantör (dataspärren, `src/server/ai/guard.ts`):** OpenAI används bara för syntetiska konversationer av användare med AI-testbehörighet när `FOLKE_AI_PROVIDER=openai`. Allt annat besvaras av mock-providern. Modellen är assistentens val i databasen, kontrollerat mot modellkatalogen.
+5. **Val av leverantör (dataspärren, `src/server/ai/guard.ts`):** med `FOLKE_AI_PROVIDER=openai` och `approved-documents` besvaras vanliga konversationer av OpenAI med enbart godkända dokument. Syntetiska konversationer kräver AI-testbehörighet och använder bara syntetiska dokument. Allt annat besvaras av mock-providern. Modellen är assistentens val i databasen, kontrollerat mot modellkatalogen.
 6. För OpenAI kontrolleras gränserna atomiskt i databasen (`ai_begin_request`: budgetar, samtidighet och frågor per minut). Därefter sparas användarens meddelande.
 7. **Retrieval:** `search_document_chunks_hybrid` körs som användaren (SECURITY INVOKER, RLS). Svensk fulltext och, i syntetiska konversationer, vektorlikhet (pgvector, frågans embedding) slås ihop med reciprocal rank fusion. Syntetiska konversationer hämtar bara syntetiska dokument. Funktionen returnerar ett frågestyrt utdrag för källkorten. Modellen får hela textbiten.
 8. **Historik:** de senaste meddelandena inom en teckengräns. Tidigare svar som bygger på dokument som användaren inte längre kan läsa skickas inte med.
@@ -95,6 +95,9 @@ Inbjudan/återställning: e-postlänk ──► /auth/confirm (token_hash) ─�
 12. Förbrukningen (tokens, cachade tokens och uppskattad kostnad i USD och SEK) skrivs till `ai_usage` med adminklienten, så att den inte kan förfalskas. Det görs även vid fel och avbrott, då markerat som uppskattat.
 
 ## Dokumentflödet
+
+Godkännande för OpenAI (ADR-036): `setDocumentAIApprovalAction` anropar `set_document_ai_approval` med användarens klient (databasen kontrollerar att det är en systemadministratör) och indexerar sedan med `src/server/ai/indexing.ts`, i batchar om 100 textavsnitt. Statusen skrivs till `ai_index_status`. Återkallelse tar bort embeddings direkt.
+
 
 1. `createDocumentUploadAction`: dokumentposten skapas som användaren (RLS avgör om hen får ladda upp och till vilken grupp). Extra delning och assistentkopplingar sparas, och servern skapar en **engångs-URL** för uppladdning.
 2. Webbläsaren laddar upp filen direkt till den privata bucketen. Servern har inget uppladdningsflöde som begränsar filstorleken.

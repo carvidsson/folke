@@ -25,7 +25,7 @@ npm run build      # ska passera innan du är klar
 - **`import "server-only"`** först i varje ny modul under `src/server` (utom `"use server"`-filer). Exportera bara async actions från `"use server"`-filer.
 - **Välj aldrig `instructions`** från `assistants` med användarklienten. Kolumnen är inte beviljad.
 - **Chatten:** klienten skickar bara nya meddelanden, och servern äger historiken. UI:t använder protokollet i `src/lib/chat/protocol.ts`. Leverantören väljs **bara** av `chooseProviderId()` i `src/server/ai/guard.ts`, och `assertExternalAllowed()` körs före varje externt anrop.
-- **Extern AI:** skicka aldrig dokument eller konversationer med dataklassen `internal` till en extern leverantör, inte heller som embeddings. Lägg inte till vägar runt dataspärren, aktivera inte dataklassen `approved` och använd inte OpenAI:s vector stores, filer eller verktyg. Modeller läggs bara till i katalogen `src/server/ai/models.ts`, med kontrollerat pris och verifierad tillgänglighet.
+- **Extern AI:** skicka aldrig dokument med dataklassen `internal` till en extern leverantör, inte heller som embeddings. `approved` sätts bara via `set_document_ai_approval` (systemadministratör). Lägg inte till vägar runt dataspärren, skicka inga användaridentifierare och använd inte OpenAI:s vector stores, filer eller verktyg. Modeller läggs bara till i katalogen `src/server/ai/models.ts`, med kontrollerat pris och verifierad tillgänglighet.
 - **Next.js 16:** `params` och `searchParams` är promises, och middleware heter `proxy.ts`.
 
 ## Databasregler

@@ -299,6 +299,180 @@ describe("hybrid search", () => {
   });
 });
 
+/** Switches the JWT inside a transaction (to act as several users in one test). */
+async function actAs(tx: Transaction, userId: string) {
+  await tx.exec("set local role postgres");
+  const now = Math.floor(Date.now() / 1000) - 60;
+  await tx.query(`select set_config('request.jwt.claims', $1, true)`, [
+    JSON.stringify({
+      sub: userId,
+      role: "authenticated",
+      aal: "aal2",
+      amr: [
+        { method: "password", timestamp: now },
+        { method: "totp", timestamp: now + 1 },
+      ],
+    }),
+  ]);
+  await tx.exec("set local role authenticated");
+}
+
+describe("per-document approval for OpenAI", () => {
+  const approve = (tx: Transaction, id: string, approved: boolean) =>
+    tx.query<{ r: string }>(`select public.set_document_ai_approval($1, $2) as r`, [id, approved]);
+  const doc = (tx: Transaction, id: string) =>
+    tx
+      .query<{ ai_data_class: string; ai_index_status: string; ai_approved_by: string | null }>(
+        `select ai_data_class, ai_index_status, ai_approved_by from public.documents where id = $1`,
+        [id],
+      )
+      .then((r) => r.rows[0]);
+
+  it("is off by default for existing documents", async () => {
+    const { rows } = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.documents where ai_data_class = 'approved'`,
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("only system administrators can approve", async () => {
+    for (const user of [U.workshopManager, U.salesManager, U.mechanic]) {
+      await asUser(db, user, async (tx) => {
+        await expectDenied(tx, `select public.set_document_ai_approval($1, true)`, [D.warrantyApproved]);
+      });
+    }
+  });
+
+  it("an administrator approves one document, which records who and marks it for indexing", async () => {
+    await asUser(db, U.admin, async (tx) => {
+      expect((await approve(tx, D.warrantyApproved, true)).rows[0].r).toBe("approved");
+      expect(await doc(tx, D.warrantyApproved)).toEqual({
+        ai_data_class: "approved",
+        ai_index_status: "pending",
+        ai_approved_by: U.admin,
+      });
+      // Only that document.
+      expect((await doc(tx, D.salesSharedWithWorkshop)).ai_data_class).toBe("internal");
+    });
+  });
+
+  it("cannot be set by updating the row directly – not by users, not by the server", async () => {
+    await asUser(db, U.admin, async (tx) => {
+      await expectDenied(tx, `update public.documents set ai_data_class = 'approved' where id = $1`, [D.campaignApproved]);
+      await expectDenied(tx, `update public.documents set ai_index_status = 'ready' where id = $1`, [D.campaignApproved]);
+      await expectDenied(tx, `update public.documents set ai_approved_at = now() where id = $1`, [D.campaignApproved]);
+    });
+    await asServiceRollback(db, async (tx) => {
+      await expectDenied(tx, `update public.documents set ai_data_class = 'approved' where id = $1`, [D.campaignApproved]);
+    });
+  });
+
+  it("does not apply to synthetic documents or unprocessed files", async () => {
+    await asUser(db, U.admin, async (tx) => {
+      await expectDenied(tx, `select public.set_document_ai_approval($1, true)`, [SYN.warranty]);
+      await tx.exec("set local role postgres");
+      await tx.query(`update public.documents set processing_status = 'processing' where id = $1`, [D.warrantyPending]);
+      await tx.exec("set local role authenticated");
+      await expectDenied(tx, `select public.set_document_ai_approval($1, true)`, [D.warrantyPending]);
+    });
+  });
+
+  it("allows embeddings only after approval", async () => {
+    await asServiceRollback(db, async (tx) => {
+      await expectDenied(tx, `update public.document_chunks set embedding = $2::extensions.halfvec where document_id = $1`, [
+        D.campaignApproved,
+        vec(7),
+      ]);
+    });
+    await asUser(db, U.admin, async (tx) => {
+      await approve(tx, D.campaignApproved, true);
+      await tx.exec("set local role service_role");
+      await tx.query(
+        `update public.document_chunks set embedding = $2::extensions.halfvec, embedding_model = $3, embedded_at = now() where document_id = $1`,
+        [D.campaignApproved, vec(7), MODEL],
+      );
+      await tx.query(`update public.documents set ai_index_status = 'ready', ai_indexed_at = now() where id = $1`, [
+        D.campaignApproved,
+      ]);
+      expect((await doc(tx, D.campaignApproved)).ai_index_status).toBe("ready");
+    });
+  });
+
+  it("revocation removes embeddings and excludes the document from the next search", async () => {
+    await asUser(db, U.admin, async (tx) => {
+      await approve(tx, D.warrantyApproved, true);
+      await tx.exec("set local role service_role");
+      await tx.query(
+        `update public.document_chunks set embedding = $2::extensions.halfvec, embedding_model = $3, embedded_at = now() where document_id = $1`,
+        [D.warrantyApproved, vec(9), MODEL],
+      );
+      await actAs(tx, U.mechanic);
+      const search = () =>
+        tx
+          .query<{ document_id: string }>(
+            `select document_id from public.search_document_chunks_hybrid($1, 'laddkabel', $2::extensions.halfvec, $3, 'approved', 8)`,
+            [fx.assistants.warranty, vec(9), MODEL],
+          )
+          .then((r) => r.rows.map((x) => x.document_id));
+      expect(await search()).toContain(D.warrantyApproved);
+      await actAs(tx, U.admin);
+      await approve(tx, D.warrantyApproved, false);
+      await actAs(tx, U.mechanic);
+      expect(await search()).toEqual([]);
+      const { rows } = await tx.query<{ n: number }>(
+        `select count(*)::int as n from public.document_chunks where document_id = $1 and embedding is not null`,
+        [D.warrantyApproved],
+      );
+      expect(rows[0].n).toBe(0);
+      expect(await doc(tx, D.warrantyApproved)).toMatchObject({ ai_data_class: "internal", ai_index_status: "none" });
+    });
+  });
+
+  it("approved documents stay invisible to other groups", async () => {
+    await asUser(db, U.admin, async (tx) => {
+      await approve(tx, D.campaignApproved, true);
+      await actAs(tx, U.mechanic);
+      const { rows } = await tx.query(
+        `select document_id from public.search_document_chunks_hybrid($1, 'företagsleasing', null, null, 'approved', 8)`,
+        [fx.assistants.sales],
+      );
+      expect(rows).toEqual([]);
+    });
+  });
+});
+
+describe("conversation history management", () => {
+  it("owners can rename their conversations, nobody else can", async () => {
+    await asUser(db, U.seller, async (tx) => {
+      const { rows } = await tx.query(`update public.conversations set title = 'Nytt namn' where id = $1 returning id`, [
+        "30000000-0000-4000-8000-000000000002",
+      ]);
+      expect(rows).toHaveLength(1);
+    });
+    for (const user of [U.mechanic, U.admin]) {
+      await asUser(db, user, async (tx) => {
+        const { rows } = await tx.query(`update public.conversations set title = 'Kapad' where id = $1 returning id`, [
+          "30000000-0000-4000-8000-000000000002",
+        ]);
+        expect(rows).toHaveLength(0);
+      });
+    }
+  });
+
+  it("bulk delete only removes the caller's own conversations", async () => {
+    await asUser(db, U.seller, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `delete from public.conversations where id = any($1) returning id`,
+        [["30000000-0000-4000-8000-000000000001", "30000000-0000-4000-8000-000000000002", "30000000-0000-4000-8000-000000000003"]],
+      );
+      expect(rows.map((r) => r.id).sort()).toEqual([
+        "30000000-0000-4000-8000-000000000002",
+        "30000000-0000-4000-8000-000000000003",
+      ]);
+    });
+  });
+});
+
 describe("assistant model choice", () => {
   it("is readable but not writable by assistant managers", async () => {
     await asUser(db, U.salesManager, async (tx) => {

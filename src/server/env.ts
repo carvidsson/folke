@@ -29,12 +29,15 @@ const schema = z.object({
 
   /**
    * "mock" (default): no external AI calls at all.
-   * "openai": OpenAI is used, but ONLY for synthetic conversations of users
-   * with AI test access (FOLKE_AI_EXTERNAL_DATA=synthetic-only).
+   * "openai": OpenAI answers according to FOLKE_AI_EXTERNAL_DATA.
    */
   FOLKE_AI_PROVIDER: z.enum(["mock", "openai"]).default("mock"),
-  /** The only accepted value until a vendor agreement is approved. */
-  FOLKE_AI_EXTERNAL_DATA: z.literal("synthetic-only").default("synthetic-only"),
+  /**
+   * "synthetic-only" (default): only synthetic test conversations use OpenAI.
+   * "approved-documents": ordinary conversations use OpenAI too, with
+   * documents a system administrator approved one by one (ADR-036).
+   */
+  FOLKE_AI_EXTERNAL_DATA: z.enum(["synthetic-only", "approved-documents"]).default("synthetic-only"),
 
   OPENAI_API_KEY: optional(),
   OPENAI_PROJECT: optional(),

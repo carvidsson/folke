@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Check, Download, RotateCcw, Trash2, UsersRound, X } from "lucide-react";
+import { Archive, Check, Download, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldOff, Trash2, UsersRound, X } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -8,6 +8,7 @@ import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { DetailList, DetailSection } from "@/components/common/detail-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Sheet,
   SheetContent,
@@ -24,9 +25,14 @@ import {
   getDownloadUrlAction,
   reviewDocumentAction,
 } from "@/server/documents/actions";
+import {
+  reindexDocumentAction,
+  setDocumentAIApprovalAction,
+  setDocumentAssistantsAction,
+} from "@/server/documents/ai-actions";
 import type { KnowledgeDocumentView } from "@/server/data/documents";
 
-import { ProcessingBadge, ReviewBadge, ValidityBadge } from "./document-badges";
+import { AIBadge, ProcessingBadge, ReviewBadge, ValidityBadge } from "./document-badges";
 import { DocumentIcon } from "./document-icon";
 import type { GroupOption } from "./knowledge-view";
 
@@ -38,6 +44,8 @@ export function DocumentSheet({
   groups,
   canReview,
   canDelete,
+  isAdmin,
+  aiEnabled,
 }: {
   document: KnowledgeDocumentView | null;
   onOpenChange: (open: boolean) => void;
@@ -46,6 +54,9 @@ export function DocumentSheet({
   groups: GroupOption[];
   canReview: boolean;
   canDelete: boolean;
+  isAdmin: boolean;
+  /** OpenAI is enabled for approved documents in this environment. */
+  aiEnabled: boolean;
 }) {
   return (
     <Sheet open={document !== null} onOpenChange={onOpenChange}>
@@ -56,9 +67,12 @@ export function DocumentSheet({
             document={document}
             collectionName={collectionName}
             assistants={assistants.filter((a) => document.assistantIds.includes(a.id))}
+            allAssistants={assistants}
             groups={groups}
             canReview={canReview}
             canDelete={canDelete}
+            isAdmin={isAdmin}
+            aiEnabled={aiEnabled}
             onClose={() => onOpenChange(false)}
           />
         )}
@@ -71,22 +85,58 @@ function DocumentDetails({
   document: d,
   collectionName,
   assistants,
+  allAssistants,
   groups,
   canReview,
   canDelete,
+  isAdmin,
+  aiEnabled,
   onClose,
 }: {
   document: KnowledgeDocumentView;
   collectionName: string;
   assistants: Assistant[];
+  allAssistants: Assistant[];
   groups: GroupOption[];
   canReview: boolean;
   canDelete: boolean;
+  isAdmin: boolean;
+  aiEnabled: boolean;
   onClose: () => void;
 }) {
   const [pending, startTransition] = useTransition();
   const [comment, setComment] = useState("");
   const [rejecting, setRejecting] = useState(false);
+  const [editingAssistants, setEditingAssistants] = useState(false);
+  const [assistantIds, setAssistantIds] = useState<string[]>(d.assistantIds);
+
+  function run(action: () => Promise<{ ok: true; message?: string } | { ok: false; error: string }>, onOk?: () => void) {
+    startTransition(async () => {
+      const result = await action().catch(() => ({ ok: false as const, error: "Åtgärden kunde inte genomföras." }));
+      if (result.ok) {
+        if (result.message) toast.success(result.message);
+        onOk?.();
+      } else {
+        toast.error(result.error);
+      }
+    });
+  }
+
+  function approveForAI() {
+    if (
+      !window.confirm(
+        `Godkänn "${d.title}" för OpenAI?\n\nDokumentets text skickas till OpenAI för indexering (embeddings) och som underlag i svar till behöriga användare. Godkännandet gäller bara det här dokumentet och kan återkallas.`,
+      )
+    ) {
+      return;
+    }
+    run(() => setDocumentAIApprovalAction(d.id, true));
+  }
+
+  function revokeAI() {
+    if (!window.confirm(`Återkalla godkännandet för "${d.title}"? Dokumentet används inte längre i nya AI-svar.`)) return;
+    run(() => setDocumentAIApprovalAction(d.id, false));
+  }
   const owner = groups.find((g) => g.id === d.ownerGroupId);
   const shared = groups.filter((g) => d.sharedGroupIds.includes(g.id));
 
@@ -135,6 +185,9 @@ function DocumentDetails({
           {d.processing !== "failed" && <ReviewBadge status={d.reviewStatus} />}
           {d.processing !== "ready" && <ProcessingBadge state={d.processing} />}
           {d.reviewStatus === "approved" && <ValidityBadge validity={d.validity} />}
+          {(aiEnabled || d.aiDataClass !== "internal") && (
+            <AIBadge dataClass={d.aiDataClass} indexStatus={d.aiIndexStatus} />
+          )}
         </div>
       </SheetHeader>
 
@@ -196,6 +249,70 @@ function DocumentDetails({
         </DetailSection>
       )}
 
+      {(aiEnabled || d.aiDataClass === "approved") && d.aiDataClass !== "synthetic" && (
+        <DetailSection title="OpenAI">
+          {d.aiDataClass === "approved" ? (
+            <div className="flex flex-col gap-3 text-sm">
+              <DetailList
+                items={[
+                  {
+                    label: "Status",
+                    value:
+                      d.aiIndexStatus === "ready"
+                        ? "Godkänt och indexerat"
+                        : d.aiIndexStatus === "failed"
+                          ? "Godkänt, indexeringen misslyckades"
+                          : "Godkänt, indexering pågår",
+                  },
+                  ...(d.aiApprovedAt
+                    ? [{ label: "Godkänt av", value: `${d.aiApprovedByName ?? "Okänd"}, ${formatDate(d.aiApprovedAt)}` }]
+                    : []),
+                ]}
+              />
+              {d.aiIndexStatus === "failed" && d.aiIndexError && (
+                <p className="rounded-lg bg-destructive/6 px-3 py-2.5 text-destructive">{d.aiIndexError}</p>
+              )}
+              {d.reviewStatus !== "approved" && (
+                <p className="text-muted-foreground">
+                  Används först när dokumentet också är godkänt i granskningen och giltigt.
+                </p>
+              )}
+              {isAdmin && (
+                <div className="flex flex-wrap gap-2">
+                  {d.aiIndexStatus !== "ready" && aiEnabled && (
+                    <Button variant="outline" disabled={pending} onClick={() => run(() => reindexDocumentAction(d.id))}>
+                      <RefreshCw />
+                      Indexera igen
+                    </Button>
+                  )}
+                  <Button variant="outline" className="text-destructive" disabled={pending} onClick={revokeAI}>
+                    <ShieldOff />
+                    Återkalla godkännande
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3 text-sm">
+              <p className="text-muted-foreground">
+                Dokumentet är inte godkänt för OpenAI och skickas aldrig dit. Assistenterna använder det inte i AI-svar.
+              </p>
+              {isAdmin &&
+                (d.processing === "ready" ? (
+                  <div>
+                    <Button disabled={pending} onClick={approveForAI}>
+                      <ShieldCheck />
+                      {pending ? "Godkänner och indexerar…" : "Godkänn för OpenAI"}
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">Kan godkännas när texten har lästs in.</p>
+                ))}
+            </div>
+          )}
+        </DetailSection>
+      )}
+
       <DetailSection title="Metadata">
         <DetailList
           items={[
@@ -234,15 +351,57 @@ function DocumentDetails({
       </DetailSection>
 
       <DetailSection title="Används av">
-        <ul className="flex flex-col gap-2">
-          {assistants.map((a) => (
-            <li key={a.id} className="flex items-center gap-2.5 text-sm">
-              <AssistantAvatar assistant={a} size="sm" />
-              {a.name}
-            </li>
-          ))}
-          {assistants.length === 0 && <li className="text-sm text-muted-foreground">Ingen assistent</li>}
-        </ul>
+        {editingAssistants ? (
+          <div className="flex flex-col gap-3">
+            {allAssistants.map((a) => (
+              <label key={a.id} className="flex items-center gap-2.5 text-sm">
+                <Checkbox
+                  checked={assistantIds.includes(a.id)}
+                  onCheckedChange={(checked) =>
+                    setAssistantIds((ids) => (checked ? [...ids, a.id] : ids.filter((id) => id !== a.id)))
+                  }
+                />
+                <AssistantAvatar assistant={a} size="sm" />
+                {a.name}
+              </label>
+            ))}
+            <div className="flex gap-2">
+              <Button
+                disabled={pending || assistantIds.length === 0}
+                onClick={() => run(() => setDocumentAssistantsAction(d.id, assistantIds), () => setEditingAssistants(false))}
+              >
+                Spara
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setAssistantIds(d.assistantIds);
+                  setEditingAssistants(false);
+                }}
+              >
+                Avbryt
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <ul className="flex flex-col gap-2">
+              {assistants.map((a) => (
+                <li key={a.id} className="flex items-center gap-2.5 text-sm">
+                  <AssistantAvatar assistant={a} size="sm" />
+                  {a.name}
+                </li>
+              ))}
+              {assistants.length === 0 && <li className="text-sm text-muted-foreground">Ingen assistent</li>}
+            </ul>
+            {canReview && d.aiDataClass !== "synthetic" && (
+              <Button variant="ghost" size="sm" className="mt-3 -ml-2" onClick={() => setEditingAssistants(true)}>
+                <Pencil />
+                Ändra assistenter
+              </Button>
+            )}
+          </>
+        )}
       </DetailSection>
 
       <DetailSection title="Delning">

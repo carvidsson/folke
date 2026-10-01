@@ -3,12 +3,9 @@ import "server-only";
 import { chunkSections } from "@/server/documents/chunk";
 import { createSupabaseAdminClient } from "@/server/supabase/admin";
 
-import { assertEmbeddable } from "./guard";
-import { beginAIRequest, finishAIRequest } from "./limits";
+import { indexDocument } from "./indexing";
 import { embeddingModel } from "./models";
-import { createEmbeddings } from "./providers/openai";
 import { SYNTHETIC_CORPUS, SYNTHETIC_GROUP_NAME, SYNTHETIC_TAG } from "./synthetic-corpus";
-import { recordEmbeddingUsage } from "./usage";
 
 /**
  * Server operations for the synthetic AI test setup. Callers MUST have
@@ -17,7 +14,6 @@ import { recordEmbeddingUsage } from "./usage";
  */
 
 const BUCKET = "documents";
-const EMBED_BATCH = 50;
 
 function ignoreDuplicate(error: { code?: string; message: string } | null) {
   if (error && error.code !== "23505") throw new Error(error.message);
@@ -173,53 +169,17 @@ export async function setAITestAccess(userId: string, enabled: boolean) {
   }
 }
 
-/**
- * Creates embeddings for synthetic chunks that lack one for the configured
- * model. Only synthetic documents are selected, checked again in code, and
- * the database trigger rejects anything else.
- */
+/** Creates embeddings for all synthetic documents (see ./indexing.ts). */
 export async function indexSyntheticEmbeddings(actorId: string): Promise<{ chunks: number; tokens: number }> {
   const admin = createSupabaseAdminClient();
-  const model = embeddingModel();
-  const { data: docs } = await admin.from("documents").select("id, ai_data_class").eq("ai_data_class", "synthetic");
-  const documents = (docs ?? []) as { id: string; ai_data_class: string }[];
-  assertEmbeddable(documents);
-  if (!documents.length) return { chunks: 0, tokens: 0 };
-
-  const { data: chunkRows, error } = await admin
-    .from("document_chunks")
-    .select("id, content, embedding_model, embedded_at")
-    .in("document_id", documents.map((d) => d.id))
-    .order("id");
-  if (error) throw new Error(error.message);
-  const pending = ((chunkRows ?? []) as { id: number; content: string; embedding_model: string | null; embedded_at: string | null }[])
-    .filter((c) => !c.embedded_at || c.embedding_model !== model.id);
-
+  const { data: docs } = await admin.from("documents").select("id").eq("ai_data_class", "synthetic");
+  let chunks = 0;
   let tokens = 0;
-  for (let i = 0; i < pending.length; i += EMBED_BATCH) {
-    const batch = pending.slice(i, i + EMBED_BATCH);
-    const limit = await beginAIRequest(actorId, "embedding");
-    if (!limit.ok) throw new Error(limit.message);
-    try {
-      const result = await createEmbeddings(model.id, model.dimensions, batch.map((c) => c.content));
-      tokens += result.tokens;
-      await recordEmbeddingUsage({ userId: actorId, model: model.id, tokens: result.tokens });
-      for (const [j, chunk] of batch.entries()) {
-        const { error: updateError } = await admin
-          .from("document_chunks")
-          .update({
-            embedding: `[${result.vectors[j].join(",")}]`,
-            embedding_model: model.id,
-            embedded_at: new Date().toISOString(),
-          })
-          .eq("id", chunk.id);
-        if (updateError) throw new Error(updateError.message);
-      }
-      await finishAIRequest(limit.requestId, "completed");
-    } catch (e) {
-      await finishAIRequest(limit.requestId, "failed");
-      throw e;
-    }
+  for (const doc of (docs ?? []) as { id: string }[]) {
+    const result = await indexDocument(doc.id, actorId);
+    if (result.status === "failed") throw new Error(result.error ?? "Indexeringen misslyckades.");
+    chunks += result.chunks;
+    tokens += result.tokens;
   }
-  return { chunks: pending.length, tokens };
+  return { chunks, tokens };
 }

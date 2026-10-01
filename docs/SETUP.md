@@ -223,6 +223,49 @@ Skriptet är idempotent. En befintlig användare får rollen utan ny inbjudan oc
 
 ---
 
+## 11. Riktiga dokument med OpenAI (folke-dev)
+
+Gäller utvecklingsprojektet med `FOLKE_AI_PROVIDER=openai` och `FOLKE_AI_EXTERNAL_DATA=approved-documents`. Pilotprojektet påverkas inte. Beslut: ADR-036.
+
+### Så laddar du upp ett dokument, godkänner det och ställer frågor
+
+1. **Ladda upp:** **Kunskapsbank → Ladda upp dokument**. Välj fil, titel, samling, ansvarig grupp, vilka **assistenter** som får använda dokumentet och vilka grupper det delas med. Intyga att det är internt utan kunduppgifter.
+2. **Granska:** öppna dokumentet och klicka **Godkänn**. Det är den vanliga granskningen, som avgör att dokumentet får användas som källa.
+3. **Godkänn för OpenAI:** i samma panel, avsnittet **OpenAI**, klicka **Godkänn för OpenAI** och bekräfta. Folke skapar embeddings direkt. Statusen visas som *OpenAI: godkänt* när indexeringen är klar, eller som *OpenAI: indexeringsfel* med en förklaring och knappen **Indexera igen**.
+4. **Fråga:** behöriga användare öppnar **Ny chatt** med en av dokumentets assistenter och ställer frågan som vanligt. Svaret kommer från OpenAI med källkort som visar dokument och sida.
+
+Ändra assistenter i efterhand med **Ändra assistenter** i panelen. **Återkalla godkännande** i samma avsnitt gäller direkt: dokumentet används inte i nästa AI-svar och dess embeddings tas bort.
+
+### Vad som gäller
+
+- Godkännandet gäller **ett dokument i taget** och är avstängt som standard. Inga befintliga dokument godkänns automatiskt.
+- Ett godkänt dokument används bara om det också är granskat och godkänt, giltigt, delat med användarens grupp och kopplat till assistenten. Allt detta kontrolleras i databasen innan text hämtas.
+- Ej godkända dokument skickas aldrig till OpenAI, varken som svar eller som embeddings.
+- Till OpenAI skickas assistentens instruktioner, regler, frågan, en begränsad historik och de hämtade utdragen med titel och sida. Inga namn, e-postadresser, användar-id eller andra interna metadata skickas.
+- Syntetiskt testläge (avsnitt 10) finns kvar för automatiserade tester och behövs inte för vanliga konversationer.
+
+### Chatthistorik
+
+- **Byt namn** och **Ta bort konversation** finns i menyn (⋯) i chattens huvud.
+- **Alla konversationer** i sidomenyn visar alla egna konversationer. Där kan man byta namn och markera flera för borttagning. Borttagning kräver alltid bekräftelse.
+- Bara ägaren kan ändra eller ta bort en konversation (RLS).
+
+### Verifierat i folke-dev 2026-10-01
+
+Livetester 37/37. Webbläsartest 33/33 med syntetiska användare och testdokument som togs bort efteråt. Christoffers konto och dokument rördes inte.
+
+| Område | Verifierat |
+|---|---|
+| Status | Panel och lista visar *OpenAI: ej godkänt* eller *godkänt*, vem som godkänt, assistenter och indexeringsstatus |
+| Godkännande | Via UI. Indexering av alla textavsnitt (s. 1–3). Ej godkänt dokument får inga embeddings. |
+| Svar | Rätt pris med källa *s. 2*, följdfråga med källa *s. 3*. Kostnad registreras som intern konversation med gpt-6-luna. |
+| Spärrar | Ej godkänt dokument används aldrig. En annan grupp med samma assistent ser inte dokumentet. |
+| Återkallelse | Gäller direkt, embeddings tas bort, och historiken i samma konversation används inte längre som väg till dokumentet |
+| Historik | Byt namn, radering av flera med bekräftelse, enskild radering. Andra användares konversationer påverkas inte. |
+| Säkerhet | API-nyckeln syns inte i sidorna. Inga JavaScript- eller CSP-fel. |
+
+---
+
 ## 10. AI med OpenAI (endast syntetiska testdata)
 
 Gäller tills leverantörsavtal och behandling av Börjessons interna information är godkända. Bakgrund: [SECURITY.md](SECURITY.md#extern-ai-openai) och ADR-031–035 i [DECISIONS.md](DECISIONS.md).

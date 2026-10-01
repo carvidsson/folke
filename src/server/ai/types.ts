@@ -34,8 +34,6 @@ export interface ChatCompletionInput {
   context: ContextChunk[];
   /** Model id from the catalog (ignored by the mock provider). */
   model?: string;
-  /** Pseudonymous user reference for the vendor's abuse detection. */
-  safetyIdentifier?: string;
   signal?: AbortSignal;
   /**
    * Called exactly once when tokens were consumed – also after errors and

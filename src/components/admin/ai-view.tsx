@@ -73,9 +73,11 @@ export function AIAdminView({ openAI, status, models, assistants, synthetic, use
       />
 
       <p className="mt-6 rounded-xl border bg-warning-subtle px-4 py-3 text-sm">
-        {openAI
-          ? "OpenAI är aktiverat enbart för syntetiska testdata. Interna dokument och vanliga konversationer skickas aldrig till OpenAI – de besvaras i mockläge. Spärren gäller tills leverantörsavtal och behandling av intern information är godkända."
-          : "Folke körs i mockläge. Ingen AI-leverantör anropas. Modellvalen nedan sparas och används först när OpenAI aktiveras för syntetiska tester."}
+        {!openAI
+          ? "Folke körs i mockläge. Ingen AI-leverantör anropas. Modellvalen nedan sparas och används först när OpenAI aktiveras."
+          : status.dataPolicy === "approved-documents"
+            ? "OpenAI besvarar vanliga konversationer med dokument som en systemadministratör har godkänt för OpenAI, ett i taget i kunskapsbanken. Ej godkända dokument skickas aldrig till OpenAI. Godkännanden kan återkallas och gäller då direkt."
+            : "OpenAI är aktiverat enbart för syntetiska testdata. Interna dokument och vanliga konversationer skickas aldrig till OpenAI – de besvaras i mockläge."}
       </p>
 
       <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -159,12 +161,26 @@ export function AIAdminView({ openAI, status, models, assistants, synthetic, use
             <Panel className="p-5">
               <DetailList
                 items={[
-                  { label: "Aktiv leverantör", value: status.provider === "openai" ? "OpenAI (endast syntetiska data)" : "Mockläge" },
+                  {
+                    label: "Aktiv leverantör",
+                    value:
+                      status.provider !== "openai"
+                        ? "Mockläge"
+                        : status.dataPolicy === "approved-documents"
+                          ? "OpenAI (godkända dokument)"
+                          : "OpenAI (endast syntetiska data)",
+                  },
                   { label: "API-nyckel", value: status.keyConfigured ? "Konfigurerad på servern" : "Saknas" },
                   { label: "Projekt", value: status.project },
                   { label: "Organisation", value: status.organization },
                   { label: "Endpoint", value: status.endpoint },
-                  { label: "Datapolicy", value: status.dataPolicy === "synthetic-only" ? "Endast syntetiska testdata" : status.dataPolicy },
+                  {
+                    label: "Datapolicy",
+                    value:
+                      status.dataPolicy === "approved-documents"
+                        ? "Dokument godkända per dokument, samt syntetiska testdata"
+                        : "Endast syntetiska testdata",
+                  },
                   { label: "Embeddings", value: status.embeddingModel },
                 ]}
               />
