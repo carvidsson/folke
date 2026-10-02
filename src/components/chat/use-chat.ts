@@ -74,7 +74,7 @@ export function useChat({
             mode: conversationId.current ? undefined : mode,
             message: {
               content: outgoing.text,
-              attachments: outgoing.attachments.map(({ name, mimeType, sizeBytes }) => ({ name, mimeType, sizeBytes })),
+              attachmentIds: outgoing.attachments.flatMap((a) => (a.attachmentId ? [a.attachmentId] : [])),
             },
           },
           (event) => {

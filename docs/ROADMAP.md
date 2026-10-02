@@ -104,9 +104,15 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Tidigare bedömningar är inte bindande, stegvis giltighet med kvartal, Säljinstruktion v4 (ADR-044) | ✅ Realistiskt test 5/5, även med felaktig historik |
 | Resonemangsnivå utvärderad: `low` behålls, `FOLKE_AI_REASONING_EFFORT` för mätningar | ✅ |
 
-## Nästa
+## Konversationsbilagor (ADR-045) – i folke-dev, granskas
 
-- Konversationsbilagor: dokument och bilder i chatten
+| Del | Status |
+|---|---|
+| Datamodell, privat bucket, RLS och borttagningskö | ✅ Migration `20261008090000` i folke-dev · PGlite 13, live 7 |
+| Uppladdning, bearbetning, inklistring, status, miniatyrbilder, panelen Bilagor | ✅ Webbläsartest 20/20 |
+| Dokument, bilder och inskannade PDF:er i svaren, källhierarki mot kunskapsbanken | ✅ Utvärdering 15/15 i 3/3 körningar |
+| Betan | ✅ Aktiverad 2026-10-02 med informationstext. Avtalsfrågorna ska lösas innan fler användare bjuds in. |
+| Schemalagd städning (Vercel Cron) | Senare. Kön är förberedd. |
 
 ## Senare
 

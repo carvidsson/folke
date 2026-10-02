@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { ChatView } from "@/components/chat/chat-view";
 import { NoAssistants } from "@/components/chat/no-assistants";
+import { attachmentsEnabled } from "@/server/ai/guard";
 import { getSession } from "@/server/auth/session";
 import { getMySyntheticModeAvailability } from "@/server/data/ai";
 import { listMyAssistants } from "@/server/data/assistants";
@@ -26,6 +27,7 @@ export default async function NewChatPage({ searchParams }: PageProps<"/chat">) 
       assistants={assistants}
       initialAssistantId={initial.id}
       syntheticModeAvailable={syntheticModeAvailable}
+      attachmentsEnabled={attachmentsEnabled()}
     />
   );
 }

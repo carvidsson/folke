@@ -9,7 +9,7 @@ import { setPendingPrompt } from "@/lib/chat/pending-prompt";
 import type { Assistant } from "@/lib/domain/types";
 
 /** Start-page entry point: pick an assistant, type, and land in a new chat. */
-export function QuickStart({ assistants }: { assistants: Assistant[] }) {
+export function QuickStart({ assistants, attachmentsEnabled = false }: { assistants: Assistant[]; attachmentsEnabled?: boolean }) {
   const router = useRouter();
   const [assistantId, setAssistantId] = useState(assistants[0]?.id ?? "");
   const assistant = assistants.find((a) => a.id === assistantId);
@@ -17,7 +17,7 @@ export function QuickStart({ assistants }: { assistants: Assistant[] }) {
 
   return (
     <Composer
-      allowAttachments={false}
+      attachments={attachmentsEnabled ? { conversationId: null } : undefined}
       className="mt-8"
       placeholder={`Fråga ${assistant.name}…`}
       leading={
@@ -28,8 +28,8 @@ export function QuickStart({ assistants }: { assistants: Assistant[] }) {
           size="sm"
         />
       }
-      onSubmit={({ text }) => {
-        setPendingPrompt(text);
+      onSubmit={({ text, attachments }) => {
+        setPendingPrompt({ text, attachments });
         router.push(`/chat?assistant=${assistant.slug}`);
       }}
     />

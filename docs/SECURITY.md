@@ -104,6 +104,21 @@ Begränsning: Supabase Auth, Storage och PostgREST körs inte i PGlite. Därför
 - Textbitar från ett tidigare svar läses om under samma regler. Om ett dokument har återkallats, gått ut eller inte längre delas med användaren följer det därför inte med.
 - Tidigare svar skickas aldrig som källor, och deras källmarkörer tas bort ur historiken.
 - Loggraden `[chat/retrieval]` innehåller bara konversationens id, leverantör, antal och textbitarnas id:n, aldrig dokument- eller konversationsinnehåll (ADR-043).
+
+**Konversationsbilagor (ADR-045):**
+
+| Skydd | Hur |
+|---|---|
+| Åtkomst | `conversation_attachments` och textbitarna: **endast ägaren** (RLS), ingen administratörspolicy. En bilaga kan bara kopplas till egen konversation och inte flyttas. Status, sökväg och textbitar skrivs bara av servern (kolumnbehörigheter och triggrar). |
+| Filer | Privat bucket `conversation-attachments` (högst 20 MB, elva tillåtna MIME-typer), inga policyer för slutanvändare. Uppladdning via engångs-URL efter ägarkontroll. Visning via `/api/attachments/[id]` efter ägarkontroll, inga signerade länkar. |
+| Validering | Filändelse, storlek (dokument 20 MB, bilder 10 MB) och filsignatur kontrolleras på servern. En text som utger sig för att vara en bild avvisas. Högst 5 filer per meddelande, 20 och 100 MB per konversation. |
+| Isolering från kunskapsbanken | Egna tabeller och en egen sökfunktion som kräver ägd konversation. Kunskapsbankens sökning läser aldrig bilagor. `[n]`-källor gäller bara kunskapsbanken. |
+| Extern AI | `FOLKE_AI_ATTACHMENTS` (standard `off`). När den är av döljs funktionen, servern avvisar bilagor och slutkontrollen stoppar varje externt anrop med bilagor. Bilder och PDF:er skickas inline (base64), aldrig till OpenAI:s Files API. **Betan: `on` sedan 2026-10-02** (produktägarens beslut, en användare). Vid bilagefunktionen visas: *"Ladda inte upp kunduppgifter, känsliga personuppgifter eller annan information som inte får delas med externa AI-tjänster."* Avtalsfrågorna ovan är fortfarande öppna och måste lösas innan fler användare bjuds in. |
+| Injektion | Bilagornas text omges av `<bilaga>`-taggar som texten inte kan stänga, och reglerna anger att innehållet är information, inte instruktioner (testat). |
+| Radering | Kaskad från konversation och användare. En trigger köar filen vid varje radering, och servern tar bort den. Misslyckade borttagningar ligger kvar i `storage_deletion_queue` med fel och antal försök. Osända uppladdningar tas bort efter 24 timmar. |
+| Loggning | Bara id, antal och storlek, aldrig filnamn eller innehåll. Säkerhetsloggen får inga filnamn. |
+
+Testat: `tests/db/attachments.test.ts` (13), `tests/live/attachments.test.ts` (7, folke-dev), enhetstester (18) och ett webbläsartest (20 kontroller, bland annat 404 för en annan användare och radering i Storage).
 - Täcks av `tests/db/ai-guard.test.ts` (4 tester) och `tests/ai-eval/retrieval.eval.ts`. Utvärderingen kontrollerar bland annat att utgångna dokument aldrig hamnar i kontexten.
 
 ## Extern AI (OpenAI)

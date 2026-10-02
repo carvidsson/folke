@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { SourceReference } from "@/lib/domain/types";
+import type { Attachment, SourceReference } from "@/lib/domain/types";
 import { stripCitationMarkers } from "@/server/ai/citations";
 import { stockholmDate } from "@/server/ai/prompt";
 import type { ContextChunk, ProviderMessage } from "@/server/ai/types";
@@ -60,6 +60,8 @@ export function toContext(rows: SearchRow[]): { context: ContextChunk[]; sources
 
 export interface HistoryRow extends ProviderMessage {
   sources: SourceReference[] | null;
+  /** Attachment metadata stored on user messages (ADR-045). */
+  attachments?: Pick<Attachment, "attachmentId">[] | null;
 }
 
 /**

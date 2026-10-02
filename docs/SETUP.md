@@ -342,6 +342,7 @@ Under **Administration → AI och modeller → Modell per assistent** väljer du
 - Spärrar i servern, kontrollerade i databasen före varje anrop: budget per användare och dag, månadsbudget, antal samtidiga svar och antal frågor per minut (`FOLKE_AI_*` i `.env.example`).
 - Längsta svar: `FOLKE_AI_MAX_OUTPUT_TOKENS`, standard 2 000. Gränsen inkluderar modellens resonemangstokens. Ett svar som ändå når gränsen sparas med en notering om att det avbröts (ADR-043).
 - Resonemangsnivå: `low` för alla assistenter, satt i modellkatalogen (`src/server/ai/models.ts`). Den valfria variabeln `FOLKE_AI_REASONING_EFFORT` (`low` eller `medium`) skriver över nivån för alla assistenter. Den används för att utvärdera `medium` i folke-dev utan kodändring (ADR-044).
+- Konversationsbilagor: `FOLKE_AI_ATTACHMENTS` (`off` som standard, `on` för att slå på). När den är på kan användare bifoga dokument och bilder i chatten, och innehållet skickas till OpenAI när svaret tas fram. Betan har `on` sedan 2026-10-02, med en informationstext vid bilagefunktionen. Avtalsfrågorna i SECURITY.md ska lösas innan fler användare bjuds in (ADR-045). Test: `node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.eval.config.mts tests/ai-eval/attachments.eval.ts` (sätter `on` bara för testprocessen).
 - Budgeten i OpenAI-projektet är ett extra skydd men **ingen garanterad hård gräns**. Kontrollera också användningen i OpenAI-dashboarden.
 
 ### Testa

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import type { ActionResult } from "@/server/admin/actions";
+import { cleanUpAttachmentFiles } from "@/server/attachments/cleanup";
 import { getSession } from "@/server/auth/session";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
@@ -53,6 +54,8 @@ export async function deleteConversationsAction(conversationIds: string[]): Prom
     .eq("user_id", user.id);
   if (error || !count) return { ok: false, error: ids.length > 1 ? "Konversationerna kunde inte tas bort." : "Konversationen kunde inte tas bort." };
 
+  // Attachments were deleted by cascade and their files queued (ADR-045).
+  await cleanUpAttachmentFiles();
   revalidatePath("/", "layout");
   return {
     ok: true,

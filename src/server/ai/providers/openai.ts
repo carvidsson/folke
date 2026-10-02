@@ -40,6 +40,29 @@ export function reasoningFor(
   return { effort: override ?? catalog };
 }
 
+/**
+ * Responses API input. Without files: plain text messages, exactly as
+ * before. With files (ADR-045): images (`detail: auto` – `low` loses small
+ * text) and image-only PDFs are added inline to the last user message.
+ */
+export function toInput(messages: ChatCompletionInput["messages"], files: NonNullable<ChatCompletionInput["files"]>) {
+  const last = messages.map((m) => m.role).lastIndexOf("user");
+  return messages.map((m, i) => {
+    if (i !== last || files.length === 0) return { role: m.role, content: m.content };
+    return {
+      role: m.role,
+      content: [
+        { type: "input_text" as const, text: m.content },
+        ...files.map((f) =>
+          f.kind === "image"
+            ? { type: "input_image" as const, image_url: f.dataUrl, detail: "auto" as const }
+            : { type: "input_file" as const, filename: f.name, file_data: f.dataUrl },
+        ),
+      ],
+    };
+  });
+}
+
 /** Appended when the output-token limit cut the answer (the partial answer is kept). */
 export const TRUNCATED_NOTE =
   "\n\n_(Svaret blev för långt och avbröts här. Be mig gärna fortsätta, eller fråga om en del i taget.)_";
@@ -102,7 +125,7 @@ export const openAIProvider: AIProvider = {
   id: "openai",
   external: true,
 
-  async *streamChat({ system, messages, model: requested, signal, onUsage }: ChatCompletionInput) {
+  async *streamChat({ system, messages, files = [], model: requested, signal, onUsage }: ChatCompletionInput) {
     const model = resolveChatModel(requested);
     const env = serverEnv();
     let usage: UsageReport | null = null;
@@ -115,7 +138,7 @@ export const openAIProvider: AIProvider = {
         {
           model: model.id,
           instructions: system,
-          input: messages.map((m) => ({ role: m.role, content: m.content })),
+          input: toInput(messages, files),
           stream: true,
           store: false,
           max_output_tokens: env.FOLKE_AI_MAX_OUTPUT_TOKENS,

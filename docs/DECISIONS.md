@@ -303,6 +303,32 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 
 `medium` gav ingen kvalitetsvinst som motiverade ungefär dubbel svarstid och ett högre output-tak. Kvalitetssviten gav 21/21 och testet av publicerade instruktioner godkänt med båda nivåerna.
 
+### ADR-045 – Konversationsbilagor
+
+**Beslut:**
+- **Arbetsmaterial, inte kunskapsbank.** Användare kan bifoga dokument (PDF, Word, Excel, PowerPoint, text, CSV) och bilder (PNG, JPEG, WEBP, GIF) i chatten i alla assistenter, även på startsidan. Bilagorna hör till användaren och konversationen. De blir aldrig dokument i kunskapsbanken och påverkar aldrig andra konversationer.
+- **Separat datamodell och bucket:** `conversation_attachments`, `conversation_attachment_chunks` och en privat bucket, `conversation-attachments`.
+  - Bara ägaren har åtkomst, och det finns ingen administratörspolicy (som för konversationer).
+  - Extraktion, uppdelning i textbitar och embeddings återanvänds från kunskapsbanken.
+  - Kunskapsbankens sökfunktioner läser aldrig de nya tabellerna.
+- **Aktiva bilagor per tur:** en bilaga är aktiv om den bifogades i det aktuella meddelandet, i någon av de två föregående frågorna när den aktuella är en följdfråga, eller om frågan uttryckligen pekar på bilagor eller nämner filnamnet.
+  - Bilder och PDF:er utan textlager skickas bara när de är aktiva, högst 4 respektive 2.
+  - Aktiva dokument skickas i sin helhet upp till 24 000 tecken, annars som de mest relevanta textbitarna (16 000 tecken).
+  - Dokument som inte är aktiva bidrar bara med ordträffar (högst 6 textbitar).
+  - På så sätt följer irrelevanta äldre bilder inte med.
+- **Bilder och inskannade PDF:er:** skickas inline som base64 (`input_image` med `detail: auto`, respektive `input_file`), aldrig via OpenAI:s Files API. Textextraktion är alltid förstahandsval. En PDF utan textlager läses av modellen själv, men bara upp till 20 sidor och 10 MB. Det finns ingen separat OCR.
+- **Källhierarki:** bilagorna läggs i en egen promptsektion med regler som bara läggs till när bilagor används. Prompten för chattar utan bilagor är därför identisk med tidigare.
+  - Bilagor används fullt ut, utan varningar, vid vanligt arbete.
+  - En styrande uppgift som bara finns i en bilaga anges med sitt ursprung.
+  - Vid konflikt redovisas båda, och kunskapsbanken används som verifierad uppgift.
+  - Bilagor anges med filnamn och sida i löptext. `[n]` är reserverat för kunskapsbanken.
+- **Radering:** varje borttagen bilaga, oavsett om den tas bort av användaren, via kaskaden vid radering av konversationen, genom gallring eller när kontot tas bort, läggs i `storage_deletion_queue` av en trigger. Servern tömmer kön efter raderingar och gallring, och en fil vars borttagning misslyckas ligger kvar med antal försök och fel. Osända uppladdningar tas bort efter 24 timmar. Det finns inget schemalagt jobb ännu.
+- **Visning:** filerna visas via `/api/attachments/[id]` från samma ursprung, efter ägarkontroll. Inga signerade Storage-länkar lämnas ut, och CSP:n är oförändrad.
+- **Flagga:** `FOLKE_AI_ATTACHMENTS` (standard `off`). När den är av döljs funktionen och servern avvisar bilagor. Betan aktiverades 2026-10-02 med en informationstext vid bilagefunktionen, eftersom produktägaren är enda användaren. Avtalsfrågorna i SECURITY.md ska lösas innan fler användare bjuds in.
+- **Kostnad:** embeddings av bilagor loggas som `attachment_indexing` på användaren. Indexeringen kontrolleras bara mot månadsbudgeten, så att flera filer i följd inte förbrukar användarens frågor per minut. Bildtokens räknas in i chattens `input_tokens`.
+
+**Mätning (`tests/ai-eval/attachments.eval.ts`, syntetiska filer, gpt-6-luna, tre körningar):** 15 av 15 kvalitetskontroller i 3 av 3 körningar, och alla hårda kontroller var godkända. I snitt cirka 3 600 tokens in, och en skärmdump i 1280×720 kostar cirka 1 100 tokens. Svarstiden var cirka 2 s, och kostnaden cirka 0,0001 USD per svar.
+
 ---
 
 ## Öppna beslut

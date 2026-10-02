@@ -99,6 +99,16 @@ Inbjudan/återställning: e-postlänk ──► /auth/confirm (token_hash) ─�
 11. **Källkontroll:** källnummer som inte motsvarar ett hämtat utdrag tas bort, och endast citerade utdrag sparas som källor. Svaret sparas även när användaren stoppar. Om leverantören fel tas frågan bort, så att ett nytt försök inte dubblerar historiken.
 12. Förbrukningen (tokens, cachade tokens och uppskattad kostnad i USD och SEK) skrivs till `ai_usage` med adminklienten, så att den inte kan förfalskas. Det görs även vid fel och avbrott, då markerat som uppskattat.
 
+## Konversationsbilagor (ADR-045)
+
+Användarens egna filer i chatten, åtskilda från kunskapsbanken:
+
+1. **Uppladdning:** kompositören laddar upp direkt vid val, drag-and-drop eller inklistring. `createAttachmentUploadAction` skapar raden (RLS: ägaren) och en engångs-URL, och filen går direkt till bucketen `conversation-attachments`. `processAttachmentAction` kontrollerar signaturen, extraherar och delar upp text eller markerar en bild, och skapar embeddings när bilagor får gå till OpenAI. Allt finns i `src/server/attachments/`.
+2. **Skick:** klienten skickar bara `attachmentIds`. Routen kontrollerar att de är egna, klara och inom gränserna, kopplar dem till konversationen och sparar metadata på meddelandet.
+3. **Svar:** `buildAttachmentContext` väljer de aktiva bilagorna (aktuellt meddelande, följdfråga om de två senaste frågornas bilagor, eller uttrycklig hänvisning) och hämtar hela texten, de mest relevanta textbitarna (`search_conversation_attachments`), bilder och PDF:er utan textlager. Prompten får sektionen `## Användarens bilagor` efter källorna. Bilder och PDF:er läggs inline i användarens meddelande.
+4. **Radering:** triggern `conversation_attachments_queue_file` köar filer, och `cleanUpAttachmentFiles` tömmer kön efter raderingar och gallring.
+5. **Visning:** `GET /api/attachments/[id]` strömmar filen till ägaren.
+
 ## Dokumentflödet
 
 Godkännande för OpenAI (ADR-036): `setDocumentAIApprovalAction` anropar `set_document_ai_approval` med användarens klient (databasen kontrollerar att det är en systemadministratör) och indexerar sedan med `src/server/ai/indexing.ts`, i batchar om 100 textavsnitt. Statusen skrivs till `ai_index_status`. Återkallelse tar bort embeddings direkt.

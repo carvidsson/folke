@@ -13,14 +13,26 @@ import { AttachmentChip } from "./attachment-chip";
 import { Markdown } from "./markdown";
 import { Sources } from "./sources";
 
-export function UserMessage({ message }: { message: Message }) {
+/** `removedAttachments`: attachments of this conversation that have been removed since. */
+export function UserMessage({ message, removedAttachments }: { message: Message; removedAttachments?: Set<string> }) {
   return (
     <div className="flex flex-col items-end gap-2">
       {message.attachments && message.attachments.length > 0 && (
         <div className="flex flex-wrap justify-end gap-2">
-          {message.attachments.map((a) => (
-            <AttachmentChip key={a.id} attachment={a} />
-          ))}
+          {message.attachments.map((a) => {
+            const stored = a.attachmentId;
+            const removed = Boolean(stored && removedAttachments?.has(stored));
+            const href = stored ? `/api/attachments/${stored}` : null;
+            return (
+              <AttachmentChip
+                key={a.id}
+                attachment={a}
+                status={removed ? "removed" : undefined}
+                thumbnailUrl={href && a.kind === "image" && !removed ? href : undefined}
+                onOpen={href && !removed ? () => window.open(href, "_blank", "noopener") : undefined}
+              />
+            );
+          })}
         </div>
       )}
       <div className="max-w-[85%] rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-[0.9375rem] leading-6 whitespace-pre-wrap sm:max-w-[75%]">

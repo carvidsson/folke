@@ -163,6 +163,9 @@ export interface Attachment {
   name: string;
   mimeType: string;
   sizeBytes: number;
+  /** The stored conversation attachment (ADR-045); absent for metadata-only entries. */
+  attachmentId?: ID;
+  kind?: "document" | "image";
 }
 
 /** A reference from an assistant answer back to a knowledge document. */

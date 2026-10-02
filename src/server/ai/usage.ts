@@ -6,7 +6,7 @@ import { chatCostUsd, embeddingCostUsd, usdToSek } from "./pricing";
 import type { UsageReport } from "./types";
 
 /** What a call was for (ai_usage.purpose). */
-export type UsagePurpose = "conversation" | "indexing" | "instruction_test";
+export type UsagePurpose = "conversation" | "indexing" | "instruction_test" | "attachment_indexing";
 
 /**
  * Records token usage and estimated cost (service role, after the caller's

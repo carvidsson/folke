@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { ChatView } from "@/components/chat/chat-view";
+import { attachmentsEnabled } from "@/server/ai/guard";
 import { getSession } from "@/server/auth/session";
 import { listMyAssistants } from "@/server/data/assistants";
 import { getConversation } from "@/server/data/conversations";
@@ -38,6 +39,7 @@ export default async function ConversationPage({ params }: PageProps<"/chat/[con
         dataClass: conversation.dataClass,
         messages: conversation.messages,
       }}
+      attachmentsEnabled={attachmentsEnabled()}
     />
   );
 }

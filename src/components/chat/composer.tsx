@@ -1,32 +1,29 @@
 "use client";
 
-import { ArrowUp, Paperclip, Square } from "lucide-react";
+import { ArrowUp, CircleAlert, Paperclip, Square, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Attachment } from "@/lib/domain/types";
+import { ATTACHMENT_ACCEPT, ATTACHMENT_NOTICE } from "@/lib/attachments";
 import { cn } from "@/lib/utils";
 
 import { AttachmentChip } from "./attachment-chip";
+import { useAttachmentUploads } from "./use-attachment-uploads";
 import type { OutgoingMessage } from "./use-chat";
 
-const MAX_FILES = 5;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const ACCEPT = ".pdf,.docx,.xlsx,.pptx,.txt,.csv,.png,.jpg,.jpeg";
-
 /**
- * Message input with optional attachments. Attachments are only described
- * (name, type, size) – file contents are not read or uploaded yet, so chat
- * views keep them switched off until that exists.
+ * Message input. With `attachments` set, files can be attached with the
+ * paperclip, by drag-and-drop or by pasting (e.g. a screenshot). Each file is
+ * uploaded and read right away (ADR-045); the message can be sent when all
+ * files are ready.
  */
 export function Composer({
   onSubmit,
   onStop,
   isBusy = false,
   placeholder = "Skriv ett meddelande…",
-  allowAttachments = true,
+  attachments: attachmentOptions,
   autoFocus = false,
   leading,
   className,
@@ -35,47 +32,33 @@ export function Composer({
   onStop?: () => void;
   isBusy?: boolean;
   placeholder?: string;
-  allowAttachments?: boolean;
+  /** Enables attachments; the conversation (if it exists) is used for its limits. */
+  attachments?: { conversationId: string | null };
   autoFocus?: boolean;
   /** Extra controls in the bottom-left toolbar (e.g. assistant picker). */
   leading?: React.ReactNode;
   className?: string;
 }) {
+  const allowAttachments = Boolean(attachmentOptions);
   const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const uploads = useAttachmentUploads(attachmentOptions?.conversationId ?? null);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
 
-  const canSend = text.trim().length > 0 && !isBusy;
+  const blockedByFiles = uploads.busy || uploads.hasFailed;
+  const canSend = text.trim().length > 0 && !isBusy && !blockedByFiles;
+  const sendHint = uploads.busy
+    ? "Vänta tills filerna har lästs in"
+    : uploads.hasFailed
+      ? "Ta bort filer som inte kunde läsas in"
+      : null;
 
   function submit() {
     if (!canSend) return;
-    onSubmit({ text: text.trim(), attachments });
+    onSubmit({ text: text.trim(), attachments: uploads.ready });
     setText("");
-    setAttachments([]);
+    uploads.clear();
     textarea.current?.focus();
-  }
-
-  function addFiles(files: FileList | null) {
-    if (!files) return;
-    const accepted: Attachment[] = [];
-    for (const file of Array.from(files)) {
-      if (file.size > MAX_FILE_BYTES) {
-        toast.error(`${file.name} är större än 20 MB.`);
-        continue;
-      }
-      accepted.push({
-        id: crypto.randomUUID(),
-        name: file.name,
-        mimeType: file.type || "application/octet-stream",
-        sizeBytes: file.size,
-      });
-    }
-    setAttachments((current) => {
-      const next = [...current, ...accepted];
-      if (next.length > MAX_FILES) toast.error(`Du kan bifoga högst ${MAX_FILES} filer.`);
-      return next.slice(0, MAX_FILES);
-    });
   }
 
   return (
@@ -92,18 +75,35 @@ export function Composer({
       onDrop={(e) => {
         if (!allowAttachments) return;
         e.preventDefault();
-        addFiles(e.dataTransfer.files);
+        uploads.add(e.dataTransfer.files);
       }}
     >
-      {attachments.length > 0 && (
+      {uploads.rejected.length > 0 && (
+        <div role="alert" className="mx-3 mt-3 flex items-start gap-2 rounded-lg bg-destructive/5 px-3 py-2 text-[0.8125rem] text-destructive">
+          <CircleAlert className="mt-0.5 size-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            {uploads.rejected.map((r) => (
+              <p key={r}>{r}</p>
+            ))}
+          </div>
+          <button type="button" onClick={uploads.dismissRejected} aria-label="Stäng felmeddelandet" className="rounded p-0.5 hover:bg-destructive/10">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+      {uploads.items.length > 0 && (
         <div className="flex flex-wrap gap-2 px-3 pt-3">
-          {attachments.map((a) => (
+          {uploads.items.map((a) => (
             <AttachmentChip
-              key={a.id}
+              key={a.localId}
               attachment={a}
-              onRemove={() => setAttachments((all) => all.filter((x) => x.id !== a.id))}
+              status={a.status}
+              error={a.error}
+              thumbnailUrl={a.previewUrl}
+              onRemove={() => uploads.remove(a.localId)}
             />
           ))}
+          <p className="text-caption w-full">{ATTACHMENT_NOTICE}</p>
         </div>
       )}
 
@@ -121,6 +121,12 @@ export function Composer({
             submit();
           }
         }}
+        onPaste={(e) => {
+          // Pasted files, e.g. a screenshot from the clipboard.
+          if (!allowAttachments || e.clipboardData.files.length === 0) return;
+          e.preventDefault();
+          uploads.add(e.clipboardData.files);
+        }}
         rows={1}
         autoFocus={autoFocus}
         placeholder={placeholder}
@@ -134,10 +140,12 @@ export function Composer({
               ref={fileInput}
               type="file"
               multiple
-              accept={ACCEPT}
+              accept={ATTACHMENT_ACCEPT}
               className="hidden"
+              aria-hidden
+              tabIndex={-1}
               onChange={(e) => {
-                addFiles(e.target.files);
+                uploads.add(e.target.files);
                 e.target.value = "";
               }}
             />
@@ -154,12 +162,15 @@ export function Composer({
                   <Paperclip />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Bifoga fil (PDF, Word, Excel, bild)</TooltipContent>
+              <TooltipContent className="max-w-72">
+                Bifoga fil eller bild (PDF, Word, Excel, PowerPoint, text, PNG, JPEG). {ATTACHMENT_NOTICE}
+              </TooltipContent>
             </Tooltip>
           </>
         )}
         {leading}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          {sendHint && text.trim() && <span className="text-caption hidden sm:inline">{sendHint}</span>}
           {isBusy && onStop ? (
             <Button
               type="button"

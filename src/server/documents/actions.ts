@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import type { DocumentFileType } from "@/lib/domain/types";
+import { safeObjectName } from "@/lib/files";
 import type { ActionResult } from "@/server/admin/actions";
 import { logSecurityEvent } from "@/server/audit";
 import { getSession } from "@/server/auth/session";
@@ -61,17 +62,6 @@ export type CreateUploadResult =
 function fileInfo(fileName: string) {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
   return FILE_TYPES[ext] ?? null;
-}
-
-/** Storage-safe object name: ASCII only, no path separators. */
-function safeObjectName(fileName: string) {
-  const base = fileName
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .slice(-120);
-  return base || "dokument";
 }
 
 /** Step 1: create the document row and a one-time signed upload URL. */

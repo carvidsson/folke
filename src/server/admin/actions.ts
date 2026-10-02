@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { roleHas } from "@/lib/domain/roles";
 import { logSecurityEvent } from "@/server/audit";
+import { cleanUpAttachmentFiles } from "@/server/attachments/cleanup";
 import { getSession } from "@/server/auth/session";
 import { serverEnv } from "@/server/env";
 import { createSupabaseAdminClient } from "@/server/supabase/admin";
@@ -388,6 +389,8 @@ export async function purgeConversationsAction(date: string): Promise<ActionResu
       error: error.message.startsWith("Gallring") ? error.message : "Gallringen kunde inte genomföras.",
     };
   }
+  // Attachments of purged conversations were queued by the database (ADR-045).
+  await cleanUpAttachmentFiles();
   refreshAdmin();
   return { ok: true, message: `${Number(data)} konversationer har tagits bort.` };
 }

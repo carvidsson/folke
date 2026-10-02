@@ -39,6 +39,19 @@ export function assertFileSignature(type: DocumentFileType, bytes: Uint8Array) {
   }
 }
 
+export type ImageFileType = "png" | "jpeg" | "webp" | "gif";
+
+/** Verifies that the bytes are the declared image type (magic numbers). */
+export function assertImageSignature(type: ImageFileType, bytes: Uint8Array) {
+  const at = (offset: number, sig: number[]) => sig.every((b, i) => bytes[offset + i] === b);
+  const ok =
+    (type === "png" && at(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ||
+    (type === "jpeg" && at(0, [0xff, 0xd8, 0xff])) ||
+    (type === "gif" && (at(0, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) || at(0, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))) ||
+    (type === "webp" && at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50]));
+  if (!ok) throw new UnsupportedDocumentError("Filen är inte en giltig bild av den angivna typen.");
+}
+
 function decodeXml(text: string) {
   return text
     .replace(/&lt;/g, "<")

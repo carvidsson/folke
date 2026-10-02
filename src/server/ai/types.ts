@@ -37,6 +37,12 @@ export interface ChatCompletionInput {
   /** Complete system prompt (assistant instructions + rules + context). */
   system: string;
   messages: ProviderMessage[];
+  /**
+   * Files the model reads itself (ADR-045): images and PDFs without a text
+   * layer, as base64 data: URLs added to the LAST user message. Never
+   * uploaded to the provider's file storage.
+   */
+  files?: { name: string; kind: "image" | "pdf"; dataUrl: string }[];
   context: ContextChunk[];
   /** Model id from the catalog (ignored by the mock provider). */
   model?: string;

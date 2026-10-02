@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, CircleAlert, Menu, MoreHorizontal, Pencil, RotateCcw, SquarePen, Trash2 } from "lucide-react";
+import { ArrowDown, CircleAlert, Menu, MoreHorizontal, Paperclip, Pencil, RotateCcw, SquarePen, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -19,10 +19,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { takePendingPrompt } from "@/lib/chat/pending-prompt";
+import { listConversationAttachmentsAction } from "@/server/attachments/actions";
 import type { Assistant, ConversationDataClass, Message } from "@/lib/domain/types";
 
 import { AssistantPicker } from "./assistant-picker";
 import { Composer } from "./composer";
+import { ConversationAttachmentsDialog } from "./conversation-attachments-dialog";
 import { DeleteConversationsDialog, RenameConversationDialog } from "./conversation-dialogs";
 import { AssistantMessage, UserMessage } from "./message";
 import { useChat } from "./use-chat";
@@ -32,12 +34,15 @@ export function ChatView({
   initialAssistantId,
   conversation,
   syntheticModeAvailable = false,
+  attachmentsEnabled = false,
 }: {
   assistants: Assistant[];
   initialAssistantId: string;
   conversation?: { id: string; title: string; dataClass: ConversationDataClass; messages: Message[] };
   /** The user may start synthetic test conversations with OpenAI. */
   syntheticModeAvailable?: boolean;
+  /** Conversation attachments are switched on (FOLKE_AI_ATTACHMENTS, ADR-045). */
+  attachmentsEnabled?: boolean;
 }) {
   const [assistantId, setAssistantId] = useState(initialAssistantId);
   const assistant = assistants.find((a) => a.id === assistantId) ?? assistants[0];
@@ -60,16 +65,31 @@ export function ChatView({
   });
   useEffect(() => {
     const pending = takePendingPrompt();
-    if (pending) sendRef.current({ text: pending, attachments: [] });
+    if (pending) sendRef.current(pending);
   }, []);
+
+  // Attachments of earlier messages that have since been removed.
+  const [removedAttachments, setRemovedAttachments] = useState<Set<string>>(new Set());
+  const refreshAttachments = useRef(() => {});
+  useLayoutEffect(() => {
+    refreshAttachments.current = () => {
+      if (!conversation || !attachmentsEnabled) return;
+      const referenced = messages.flatMap((m) => (m.attachments ?? []).flatMap((a) => (a.attachmentId ? [a.attachmentId] : [])));
+      if (!referenced.length) return;
+      void listConversationAttachmentsAction(conversation.id).then((list) => {
+        const existing = new Set(list.map((a) => a.id));
+        setRemovedAttachments(new Set(referenced.filter((id) => !existing.has(id))));
+      });
+    };
+  });
+  useEffect(() => refreshAttachments.current(), []);
 
   const composer = (
     <Composer
       onSubmit={send}
       onStop={chat.stop}
       isBusy={isBusy}
-      // File contents are not processed in chat yet (see docs/ROADMAP.md).
-      allowAttachments={false}
+      attachments={attachmentsEnabled ? { conversationId: conversation?.id ?? null } : undefined}
       autoFocus
       placeholder={synthetic ? "Ställ en testfråga om de syntetiska dokumenten…" : `Fråga ${assistant.name}…`}
     />
@@ -89,6 +109,8 @@ export function ChatView({
       <ChatHeader
         title={conversation?.title}
         conversationId={conversation?.id}
+        attachmentsEnabled={attachmentsEnabled}
+        onAttachmentsChanged={() => refreshAttachments.current()}
         badge={
           synthetic && (
             <StatusBadge tone="warning" className="ml-1">
@@ -147,7 +169,7 @@ export function ChatView({
             {messages.map((m, i) => {
               const isLast = i === messages.length - 1;
               return m.role === "user" ? (
-                <UserMessage key={m.id} message={m} />
+                <UserMessage key={m.id} message={m} removedAttachments={removedAttachments} />
               ) : (
                 <AssistantMessage
                   key={m.id}
@@ -191,16 +213,21 @@ function ChatHeader({
   picker,
   badge,
   conversationId,
+  attachmentsEnabled = false,
+  onAttachmentsChanged,
 }: {
   title?: string;
   picker: React.ReactNode;
   badge?: React.ReactNode;
   conversationId?: string;
+  attachmentsEnabled?: boolean;
+  onAttachmentsChanged?: () => void;
 }) {
   const { sidebarVisible, openMobileNav } = useShell();
   const router = useRouter();
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showAttachments, setShowAttachments] = useState(false);
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-1 px-2 sm:px-3">
@@ -239,6 +266,12 @@ function ChatHeader({
                 <Pencil />
                 Byt namn
               </DropdownMenuItem>
+              {attachmentsEnabled && (
+                <DropdownMenuItem onSelect={() => setShowAttachments(true)}>
+                  <Paperclip />
+                  Bilagor
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
                 <Trash2 />
                 Ta bort konversation
@@ -248,6 +281,14 @@ function ChatHeader({
         )}
         {conversationId && (
           <>
+            {attachmentsEnabled && (
+              <ConversationAttachmentsDialog
+                conversationId={conversationId}
+                open={showAttachments}
+                onOpenChange={setShowAttachments}
+                onChanged={() => onAttachmentsChanged?.()}
+              />
+            )}
             <RenameConversationDialog
               conversation={renaming ? { id: conversationId, title: title ?? "" } : null}
               onOpenChange={setRenaming}

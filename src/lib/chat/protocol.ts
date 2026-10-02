@@ -23,16 +23,8 @@ export const chatRequestSchema = z.object({
   mode: z.enum(["standard", "synthetic"]).optional(),
   message: z.object({
     content: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
-    attachments: z
-      .array(
-        z.object({
-          name: z.string().max(255),
-          mimeType: z.string().max(255),
-          sizeBytes: z.number().int().nonnegative(),
-        }),
-      )
-      .max(5)
-      .optional(),
+    /** Uploaded, ready conversation attachments (ADR-045); the server verifies ownership. */
+    attachmentIds: z.array(z.uuid()).max(5).optional(),
   }),
 });
 

@@ -53,6 +53,20 @@ export function approvedDocumentsEnabled(): boolean {
   return externalProviderConfigured() && serverEnv().FOLKE_AI_EXTERNAL_DATA === "approved-documents";
 }
 
+/**
+ * Conversation attachments (ADR-045): the user's own working material. Only
+ * when FOLKE_AI_ATTACHMENTS is "on" – the explicit decision that users may
+ * attach files, including to calls to OpenAI. Off: hidden and rejected.
+ */
+export function attachmentsEnabled(): boolean {
+  return serverEnv().FOLKE_AI_ATTACHMENTS === "on";
+}
+
+/** Attachment content (text, embeddings, images) may be sent to the external provider. */
+export function attachmentsExternalAllowed(): boolean {
+  return attachmentsEnabled() && externalProviderConfigured();
+}
+
 /** Which provider a chat turn may use. Anything not explicitly allowed is mock. */
 export function chooseProviderId({ conversationClass, userHasTestAccess }: RoutingInput): "mock" | "openai" {
   if (!externalProviderConfigured()) return "mock";
@@ -90,6 +104,8 @@ export function assertExternalAllowed(input: {
   conversationClass: ConversationDataClass;
   userHasTestAccess: boolean;
   context: Pick<ContextChunk, "dataClass">[];
+  /** Number of attachment excerpts and files in the call (ADR-045). */
+  attachments?: number;
 }) {
   if (!input.external) return;
   if (!externalProviderConfigured()) throw new DataGuardError("external provider not configured");
@@ -101,6 +117,9 @@ export function assertExternalAllowed(input: {
   const allowed = allowedExternalClass(input.conversationClass);
   if (input.context.some((c) => c.dataClass !== allowed)) {
     throw new DataGuardError(`context contains documents that are not ${allowed}`);
+  }
+  if ((input.attachments ?? 0) > 0 && !attachmentsExternalAllowed()) {
+    throw new DataGuardError("attachments are not enabled for the external provider");
   }
 }
 

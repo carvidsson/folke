@@ -10,6 +10,7 @@ import { ValidityBadge } from "@/components/knowledge/document-badges";
 import { PageContainer } from "@/components/layout/page-header";
 import { firstName, formatRelative, formatShortDate } from "@/lib/format";
 import { ONBOARDING_LATER_COOKIE } from "@/lib/onboarding/constants";
+import { attachmentsEnabled } from "@/server/ai/guard";
 import { getSession } from "@/server/auth/session";
 import { listMyAssistants } from "@/server/data/assistants";
 import { listConversations } from "@/server/data/conversations";
@@ -61,7 +62,7 @@ export default async function HomePage() {
         <p className="mt-2 text-center text-sm text-muted-foreground">
           Välj en assistent och beskriv vad du behöver hjälp med.
         </p>
-        <QuickStart assistants={assistants} />
+        <QuickStart assistants={assistants} attachmentsEnabled={attachmentsEnabled()} />
         {onboarding === "remind" && (
           <Link
             href="/onboarding"

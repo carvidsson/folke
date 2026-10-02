@@ -64,6 +64,12 @@ const schema = z.object({
    * (all assistants). Unset: the model's level in src/server/ai/models.ts.
    */
   FOLKE_AI_REASONING_EFFORT: z.enum(["low", "medium"]).optional(),
+  /**
+   * Conversation attachments (ADR-045). "off" (default): the feature is
+   * hidden and the server rejects uploads. "on": users may attach files,
+   * which are used in their own conversation – also with OpenAI.
+   */
+  FOLKE_AI_ATTACHMENTS: z.enum(["off", "on"]).default("off"),
   /** Conversion for the SEK column in usage reports (an estimate). */
   FOLKE_USD_TO_SEK: number(10.5),
 });

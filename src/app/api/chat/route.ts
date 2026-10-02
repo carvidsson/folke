@@ -5,6 +5,8 @@ import { embedQuery } from "@/server/ai/embeddings";
 import { userMessageFor } from "@/server/ai/errors";
 import {
   assertExternalAllowed,
+  attachmentsEnabled,
+  attachmentsExternalAllowed,
   chooseProviderId,
   historyAllowedClasses,
   retrievalDataClass,
@@ -16,6 +18,14 @@ import { personalInstructions, personalReminder } from "@/server/ai/preferences"
 import { buildSystemPrompt, limitHistory, titleFromMessage } from "@/server/ai/prompt";
 import type { UsageReport } from "@/server/ai/types";
 import { recordChatUsage } from "@/server/ai/usage";
+import {
+  attachmentPrompt,
+  buildAttachmentContext,
+  checkAttachments,
+  EMPTY_ATTACHMENT_CONTEXT,
+  messageAttachments,
+  type AttachmentMeta,
+} from "@/server/attachments/context";
 import { logSecurityEvent } from "@/server/audit";
 import { getApiSession } from "@/server/auth/session";
 import { retrieveContext } from "@/server/chat/retrieval";
@@ -76,6 +86,16 @@ export async function POST(request: Request) {
   ]);
   const userHasTestAccess = profile?.ai_test_access === true;
 
+  // --- Attachments (ADR-045): the user's own, ready uploads only ------------
+  const attachmentIds = [...new Set(message.attachmentIds ?? [])];
+  let attachmentRows: AttachmentMeta[] = [];
+  if (attachmentIds.length) {
+    if (!attachmentsEnabled()) return jsonError("Bilagor är inte aktiverade", 400);
+    const checked = await checkAttachments(supabase, attachmentIds, conversationId);
+    if (!checked.ok) return jsonError(checked.error, 400);
+    attachmentRows = checked.rows;
+  }
+
   // --- Conversation (existing and owned, or new) ---------------------------
   let conversation: { id: string; title: string; data_class: ConversationDataClass };
   let created = false;
@@ -109,6 +129,16 @@ export async function POST(request: Request) {
     created = true;
   }
 
+  // Bind new uploads to the conversation (RLS: own uploads, own conversation).
+  const unbound = attachmentRows.filter((a) => !a.conversation_id).map((a) => a.id);
+  if (unbound.length) {
+    const { error } = await supabase.from("conversation_attachments").update({ conversation_id: conversation.id }).in("id", unbound);
+    if (error) {
+      console.error("[api/chat] could not bind attachments", error.message);
+      return jsonError("Bilagorna kunde inte kopplas till konversationen", 500);
+    }
+  }
+
   // --- Provider decision (data guard) and limits ---------------------------
   const providerId = chooseProviderId({ conversationClass: conversation.data_class, userHasTestAccess });
   const provider = getAIProvider(providerId);
@@ -127,7 +157,7 @@ export async function POST(request: Request) {
       conversation_id: conversation.id,
       role: "user",
       content: message.content,
-      attachments: message.attachments ?? [],
+      attachments: messageAttachments(attachmentRows),
     })
     .select("id")
     .single<{ id: string }>();
@@ -141,34 +171,54 @@ export async function POST(request: Request) {
   // previous one, and the chunks the previous answer cited are re-read.
   const { data: historyRows } = await supabase
     .from("messages")
-    .select("role, content, sources")
+    .select("role, content, sources, attachments")
     .eq("conversation_id", conversation.id)
     .order("created_at", { ascending: false })
     .limit(HISTORY_ROWS)
     .returns<HistoryRow[]>();
   const rows = (historyRows ?? []).reverse();
 
+  // One query embedding per text, shared by knowledge-base and attachment search.
+  const embeddings = new Map<string, ReturnType<typeof embedQuery>>();
+  const embed = (text: string) => {
+    if (!embeddings.has(text)) {
+      embeddings.set(
+        text,
+        embedQuery(text, { userId, assistantId: assistant.id, conversationId: conversation.id, dataClass: conversation.data_class }, request.signal),
+      );
+    }
+    return embeddings.get(text)!;
+  };
+
   const { context, sources, stats } = await retrieveContext(supabase, {
     assistantId: assistant.id,
     message: message.content,
     history: rows,
     dataClass: retrievalDataClass(conversation.data_class, provider.external),
-    embed: provider.external
-      ? (text) =>
-          embedQuery(
-            text,
-            { userId, assistantId: assistant.id, conversationId: conversation.id, dataClass: conversation.data_class },
-            request.signal,
-          )
-      : null,
+    embed: provider.external ? embed : null,
   });
-  // Counts and chunk ids only – never document or conversation content.
+
+  // The conversation's attachments (ADR-045). Nothing happens without any.
+  const attachmentContext = attachmentsEnabled()
+    ? await buildAttachmentContext(supabase, {
+        conversationId: conversation.id,
+        message: message.content,
+        currentIds: attachmentIds,
+        history: rows,
+        embed: provider.external && attachmentsExternalAllowed() ? embed : null,
+      })
+    : EMPTY_ATTACHMENT_CONTEXT;
+  const attachmentFiles = [
+    ...attachmentContext.images.map((f) => ({ name: f.name, kind: "image" as const, dataUrl: f.dataUrl })),
+    ...attachmentContext.pdfs.map((f) => ({ name: f.name, kind: "pdf" as const, dataUrl: f.dataUrl })),
+  ];
+  // Counts and chunk ids only – never document, attachment or conversation content.
   console.info(
     "[chat/retrieval]",
-    JSON.stringify({ conversation: conversation.id, provider: provider.id, ...stats }),
+    JSON.stringify({ conversation: conversation.id, provider: provider.id, ...stats, attachments: attachmentContext.stats }),
   );
 
-  const referenced =[...new Set(rows.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
+  const referenced = [...new Set(rows.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
   // Earlier answers are only sent again while their documents are still
   // readable – and, for external calls, still approved (revocation).
   const { data: readable } = referenced.length
@@ -220,6 +270,7 @@ export async function POST(request: Request) {
           conversationClass: conversation.data_class,
           userHasTestAccess,
           context,
+          attachments: attachmentContext.excerpts.length + attachmentFiles.length,
         });
         for await (const event of provider.streamChat({
           system: buildSystemPrompt(
@@ -230,9 +281,13 @@ export async function POST(request: Request) {
               personalReminder: personalReminder(preferences),
             },
             context,
-            { broad: stats.scope === "broad" },
+            {
+              broad: stats.scope === "broad",
+              attachments: attachmentPrompt(attachmentContext),
+            },
           ),
           messages: history,
+          files: attachmentFiles,
           context,
           model: model?.id,
           signal: request.signal,
