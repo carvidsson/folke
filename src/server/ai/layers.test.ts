@@ -41,17 +41,37 @@ describe("instruction layers", () => {
     expect(prompt).toContain(`## Organisationens instruktioner\n${tone}`);
     expect(FIXED_RULES.some((r) => /svenska|kortfattad/.test(r))).toBe(false);
     for (const rule of FIXED_RULES) expect(prompt).toContain(`- ${rule}`);
-    expect(FIXED_RULES).toHaveLength(8);
+    expect(FIXED_RULES).toHaveLength(9);
   });
 
   it("earlier answers are never sources; their re-read chunks are (ADR-042)", () => {
-    const [sources, , missing, reasoning, validity] = FIXED_RULES;
+    const [sources, , , missing, reasoning, validity] = FIXED_RULES;
     expect(sources).toContain("tidigare verifierade källor som återhämtats från samma konversation");
     expect(sources).toContain("Tidigare svar i konversationen är inte källor i sig.");
     expect(missing).toContain("säg tydligt exakt vilken uppgift som saknas och svara på resten");
     expect(reasoning).toContain("Du får resonera, jämföra, dra slutsatser och rekommendera");
     expect(reasoning).toContain("skapa aldrig nya faktauppgifter");
-    expect(validity).toContain("Avgör vad som gäller nu utifrån dagens datum");
+    expect(validity).toContain("Bedöm om ett erbjudande gäller nu i dessa steg, jämfört med dagens datum.");
+  });
+
+  it("earlier answers are not authoritative judgements (ADR-044)", () => {
+    const judgements = FIXED_RULES[1];
+    expect(judgements).toContain(
+      "inga auktoritativa bedömningar av giltighet, motsägelser, om en uppgift saknas eller vilken källa eller uppgift som ska väga tyngst",
+    );
+    expect(judgements).toContain("Gör sådana bedömningar på nytt i varje svar utifrån källorna nedan");
+    expect(judgements).toContain("får aldrig gå före källorna");
+  });
+
+  it("validity is judged step by step, with periods translated to dates (ADR-044)", () => {
+    const validity = FIXED_RULES[5];
+    expect(validity).toContain("Q1 är januari–mars, Q2 april–juni, Q3 juli–september och Q4 oktober–december");
+    expect(validity).toContain("Ingen nivå vinner automatiskt.");
+    expect(validity).toContain("Ett motstridigt äldre datum på annan plats nämns då som kontrollpunkt och gör inte erbjudandet utgånget.");
+    expect(validity).toContain("som inte på annat sätt kopplas till den aktuella perioden är utgånget, även om dokumentet gäller längre");
+    expect(validity).toContain("Samma erbjudande ska få samma bedömning oavsett om frågan gäller alla kampanjer, en jämförelse eller en rekommendation.");
+    // Generic: no brand, model or document names.
+    expect(validity).not.toMatch(/Volkswagen|Audi|VW|lathund/i);
   });
 
   it("verified sources outweigh earlier answers that said something was missing (ADR-043)", () => {
@@ -60,12 +80,8 @@ describe("instruction layers", () => {
     expect(sources).toContain("Påstå aldrig att en uppgift saknas i underlaget utan att ha kontrollerat källorna nedan.");
   });
 
-  it("validity follows the most specific clear information and the whole document (ADR-043)", () => {
-    const validity = FIXED_RULES[4];
-    expect(validity).toContain("den mest specifika tydliga giltighetsuppgiften och dokumentets sammanhang");
-    expect(validity).toContain("ett entydigt passerat slutdatum gör det inaktuellt även om dokumentet gäller längre");
-    expect(validity).toContain("är inte utgånget bara för att en enskild del har ett äldre datum");
-    expect(validity).toContain("markera motsägelsen som kontrollpunkt och avgör inte själv vilken uppgift som är rätt");
+  it("a real unresolved contradiction is reported, not decided (ADR-043)", () => {
+    expect(FIXED_RULES[5]).toContain("markera motsägelsen som kontrollpunkt och avgör inte själv vilken uppgift som är rätt");
   });
 
   it("asks for a compact answer only for broad questions, after the sources", () => {
@@ -123,7 +139,7 @@ describe("instruction layers", () => {
   });
 
   it("fixed source rules keep internal sources first and enable no web search by themselves", () => {
-    const [sources, , , , , content] = FIXED_RULES;
+    const [sources, , , , , , content] = FIXED_RULES;
     expect(sources).toContain("uttryckligen har gjort tillgängliga och godkänt");
     expect(sources).toContain("ska godkända interna källor användas");
     expect(sources).toContain("får inte ersätta interna beslut eller erbjudanden");

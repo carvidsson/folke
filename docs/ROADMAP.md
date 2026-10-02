@@ -101,6 +101,12 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Giltighet i flera nivåer, kontrollpunkt vid motsägelse | ✅ |
 | Kompakta breda svar, output-tak 2 000 tokens, tydligare meddelande vid kapning | ✅ |
 | Chatten scrollar inte längre förbi slutet | ✅ Webbläsartest |
+| Tidigare bedömningar är inte bindande, stegvis giltighet med kvartal, Säljinstruktion v4 (ADR-044) | ✅ Realistiskt test 5/5, även med felaktig historik |
+| Resonemangsnivå utvärderad: `low` behålls, `FOLKE_AI_REASONING_EFFORT` för mätningar | ✅ |
+
+## Nästa
+
+- Konversationsbilagor: dokument och bilder i chatten
 
 ## Senare
 

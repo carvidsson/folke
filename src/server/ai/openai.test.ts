@@ -2,7 +2,8 @@ import OpenAI from "openai";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AIProviderError } from "./errors";
-import { TRUNCATED_NOTE, mapOpenAIError, openAIProvider, setOpenAIClientForTests } from "./providers/openai";
+import { CHAT_MODELS } from "./models";
+import { TRUNCATED_NOTE, mapOpenAIError, openAIProvider, reasoningFor, setOpenAIClientForTests } from "./providers/openai";
 import type { UsageReport } from "./types";
 
 /**
@@ -82,6 +83,7 @@ describe("OpenAI provider request", () => {
       stream: true,
       store: false,
       max_output_tokens: 2000,
+      reasoning: { effort: "low" },
       instructions: "Systemprompt med syntetiska källor",
       input: [{ role: "user", content: "Hur lång är garantin på laddkabeln?" }],
     });
@@ -140,6 +142,14 @@ describe("OpenAI provider usage", () => {
     const { reports, error } = await run();
     expect((error as AIProviderError).code).toBe("auth");
     expect(reports).toEqual([]);
+  });
+
+  it("uses low reasoning for every catalog model, overridable for all assistants (ADR-044)", () => {
+    expect(CHAT_MODELS.map((m) => m.reasoningEffort)).toEqual(CHAT_MODELS.map(() => "low"));
+    expect(reasoningFor("medium", undefined)).toEqual({ effort: "medium" });
+    expect(reasoningFor("low", "medium")).toEqual({ effort: "medium" });
+    expect(reasoningFor("medium", "low")).toEqual({ effort: "low" });
+    expect(reasoningFor("none", "medium")).toBeUndefined();
   });
 
   it("keeps a truncated answer and says so", async () => {

@@ -8,7 +8,7 @@ import { verifyCitations } from "@/server/ai/citations";
 import { embeddingModel, resolveChatModel } from "@/server/ai/models";
 import { chatCostUsd, embeddingCostUsd } from "@/server/ai/pricing";
 import { personalInstructions, personalReminder } from "@/server/ai/preferences";
-import { buildSystemPrompt } from "@/server/ai/prompt";
+import { buildSystemPrompt, stockholmDate } from "@/server/ai/prompt";
 import { createEmbeddings, openAIProvider } from "@/server/ai/providers/openai";
 import { SYNTHETIC_CORPUS, type SyntheticAssistant } from "@/server/ai/synthetic-corpus";
 import type { ContextChunk, UsageReport } from "@/server/ai/types";
@@ -62,10 +62,19 @@ const noAnswer = (a: Answer) =>
   [...NO_ANSWER_MARKERS, "kontrollera", "behöver stämmas av", "framgår inte", "anger ingen", "anges inte"].some((m) => lower(a.text).includes(m)) ||
   /\bingen\b[^.]{0,60}\b(framgår|anges|finns)/i.test(a.text);
 
+/**
+ * Dates the model may legitimately derive: today's date (in the prompt) and
+ * the start and end days of calendar periods such as "Q4 2026" (ADR-044).
+ */
+const DERIVED_DATE_NUMBERS = ["28", "29", "30", "31", ...stockholmDate().split("-").map((n) => String(Number(n)))];
+
 /** Numbers in the answer that appear neither in the sources nor the question (ignoring small list numbers). */
 function inventedNumbers(a: Answer, question: string) {
   const norm = (s: string) => s.replace(/(\d)[\s  ](?=\d{3}\b)/g, "$1");
-  const known = new Set([...norm(a.sourceText + " " + question).matchAll(/\d+(?:[.,]\d+)?/g)].map((m) => m[0].replace(",", ".")));
+  const known = new Set([
+    ...[...norm(a.sourceText + " " + question).matchAll(/\d+(?:[.,]\d+)?/g)].map((m) => m[0].replace(",", ".")),
+    ...DERIVED_DATE_NUMBERS,
+  ]);
   return [...norm(a.text).matchAll(/\d+(?:[.,]\d+)?/g)]
     .map((m) => m[0].replace(",", "."))
     .filter((n) => !known.has(n) && Number(n) > 12 && n !== "100"); // 100: percent conversion in formulas
@@ -93,7 +102,7 @@ const CASES: Case[] = [
     question: "Skriv ett mejl till en kund som frågat om höstkampanjen Lingon. Kunden funderar på en Aurora Bas.",
     checks: (a) => [
       ...(any(a, /\bhej\b/i) ? [] : ["saknar hälsning"]),
-      ...(any(a, /gäller inte|omfattas inte|inte .*Bas|ingår inte/i) ? [] : ["säger inte att kampanjen inte gäller Bas"]),
+      ...(any(a, /gäller inte|omfattas inte|inte .*Bas|ingår (tyvärr )?inte|undantagen/i) ? [] : ["säger inte att kampanjen inte gäller Bas"]),
       ...customerChecks(a),
     ],
   },

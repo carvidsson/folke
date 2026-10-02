@@ -59,6 +59,11 @@ const schema = z.object({
   /** Includes the model's reasoning tokens (OpenAI counts them in the limit). */
   FOLKE_AI_MAX_OUTPUT_TOKENS: number(2000),
   FOLKE_AI_TIMEOUT_MS: number(45_000),
+  /**
+   * Optional override of the catalog's reasoning effort for every chat call
+   * (all assistants). Unset: the model's level in src/server/ai/models.ts.
+   */
+  FOLKE_AI_REASONING_EFFORT: z.enum(["low", "medium"]).optional(),
   /** Conversion for the SEK column in usage reports (an estimate). */
   FOLKE_USD_TO_SEK: number(10.5),
 });

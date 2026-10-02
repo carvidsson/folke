@@ -27,6 +27,19 @@ import type { AIProvider, ChatCompletionInput, ProviderEvent, UsageReport } from
 
 type ResponsesClient = Pick<OpenAI, "responses" | "embeddings" | "models">;
 
+/**
+ * Reasoning effort for a chat call: the catalog level, unless
+ * FOLKE_AI_REASONING_EFFORT overrides it for all assistants. Models without
+ * reasoning ("none") never get the parameter.
+ */
+export function reasoningFor(
+  catalog: "none" | "low" | "medium",
+  override: "low" | "medium" | undefined,
+): { effort: "low" | "medium" } | undefined {
+  if (catalog === "none") return undefined;
+  return { effort: override ?? catalog };
+}
+
 /** Appended when the output-token limit cut the answer (the partial answer is kept). */
 export const TRUNCATED_NOTE =
   "\n\n_(Svaret blev för långt och avbröts här. Be mig gärna fortsätta, eller fråga om en del i taget.)_";
@@ -106,7 +119,7 @@ export const openAIProvider: AIProvider = {
           stream: true,
           store: false,
           max_output_tokens: env.FOLKE_AI_MAX_OUTPUT_TOKENS,
-          reasoning: model.reasoningEffort === "none" ? undefined : { effort: model.reasoningEffort },
+          reasoning: reasoningFor(model.reasoningEffort, env.FOLKE_AI_REASONING_EFFORT),
         },
         { signal },
       );

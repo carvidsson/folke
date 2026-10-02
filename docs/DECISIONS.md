@@ -278,6 +278,31 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 - Breda svar: 0 av 21 kapade, i snitt 243 ord och cirka 635 output-tokens (högst 1 089).
 - Webbläsartest av chatten: 0 px extra sidhöjd även i lång konversation med tabeller.
 
+### ADR-044 – Tidigare bedömningar är inte bindande, stegvis giltighet och resonemangsnivå
+
+**Bakgrund (betatest av 76b0001):** de breda svaren avfärdade fortfarande VW-priser ur en Q4-lathund med kvarglömt Q3-datum. Det skedde trots att samma priser stod på sidor märkta "Q4 2026" i samma kontext. Historiken innehöll två tidigare svar med den felaktiga bedömningen, och en rekommendationsfråga i samma konversation behandlade samma priser som aktuella. Retrievalen var inte orsaken: rätt textbitar och metadata fanns i kontexten.
+
+**Beslut:**
+- **Fast regel A:** tidigare svar är inga auktoritativa bedömningar av giltighet, motsägelser, saknade uppgifter eller vilken källa som väger tyngst. Sådana bedömningar görs på nytt i varje svar utifrån källorna.
+- **Fast regel B (giltighet i steg, generell):**
+  - Perioder som Q1–Q4 och halvår översätts till datum.
+  - Erbjudandets egen period, avsnittets period, kampanjkoder, samma pris på andra ställen och dokumentets giltighet vägs samman. Ingen nivå vinner automatiskt.
+  - Ett motstridigt äldre datum blir en kontrollpunkt när erbjudandet tydligt kopplas till den aktuella perioden.
+  - Ett erbjudande med en egen entydig passerad period, utan annan koppling till den aktuella perioden, är utgånget.
+  - Samma erbjudande ska bedömas lika oavsett hur frågan är ställd.
+  - Säljinstruktionen v4 har samma innehåll.
+- **Resonemangsnivå:** `low` för alla assistenter, i modellkatalogen. `FOLKE_AI_REASONING_EFFORT` kan skriva över nivån för utvärderingar. Varken adaptiv nivå eller nivå per assistent införs nu.
+
+**Mätning (`tests/ai-eval/validity.eval.ts`, realistisk syntetisk struktur, 5 körningar per nivå):**
+
+| | low (tak 2 000) | medium (tak 2 000) | medium (tak 4 000) |
+|---|---|---|---|
+| Giltighet och konsekvens, även med felaktig historik | 20/20 | 20/20 | 20/20 |
+| Kapade svar | 0/20 | 13/20 | 0/20 |
+| Svarstid, rekommendation | 7–9 s | 15–19 s | 16–19 s |
+
+`medium` gav ingen kvalitetsvinst som motiverade ungefär dubbel svarstid och ett högre output-tak. Kvalitetssviten gav 21/21 och testet av publicerade instruktioner godkänt med båda nivåerna.
+
 ---
 
 ## Öppna beslut
