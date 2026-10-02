@@ -20,6 +20,7 @@ describe("instruction layers", () => {
       "## Assistentens instruktioner",
       "## Regler",
       "## Användarens önskemål",
+      "## Dagens datum",
       "## Källor",
     ].map((h) => prompt.indexOf(h));
     expect(order.every((pos) => pos >= 0)).toBe(true);
@@ -40,7 +41,49 @@ describe("instruction layers", () => {
     expect(prompt).toContain(`## Organisationens instruktioner\n${tone}`);
     expect(FIXED_RULES.some((r) => /svenska|kortfattad/.test(r))).toBe(false);
     for (const rule of FIXED_RULES) expect(prompt).toContain(`- ${rule}`);
-    expect(FIXED_RULES).toHaveLength(6);
+    expect(FIXED_RULES).toHaveLength(8);
+  });
+
+  it("earlier answers are never sources; their re-read chunks are (ADR-042)", () => {
+    const [sources, , missing, reasoning, validity] = FIXED_RULES;
+    expect(sources).toContain("tidigare verifierade källor som återhämtats från samma konversation");
+    expect(sources).toContain("Tidigare svar i konversationen är inte källor i sig.");
+    expect(missing).toContain("säg tydligt exakt vilken uppgift som saknas och svara på resten");
+    expect(reasoning).toContain("Du får resonera, jämföra, dra slutsatser och rekommendera");
+    expect(reasoning).toContain("skapa aldrig nya faktauppgifter");
+    expect(validity).toContain("Jämför med dagens datum");
+  });
+
+  it("sends today's date and each source's document metadata", () => {
+    const prompt = buildSystemPrompt(
+      { organization: "", assistant: "A." },
+      [
+        {
+          index: 1,
+          documentId: "d",
+          title: 'Kampanj "höst"',
+          content: "Text",
+          location: "Sida 3",
+          validFrom: "2026-10-01",
+          validUntil: null,
+          uploadedAt: "2026-09-30",
+          reused: true,
+        },
+        { index: 2, documentId: "e", title: "Utan metadata", content: "Text", location: null },
+      ],
+      { today: "2026-10-02" },
+    );
+    expect(prompt).toContain("## Dagens datum\n2026-10-02\n\n## Källor");
+    expect(prompt).toContain(
+      '<källa nummer="1" titel="Kampanj höst" plats="Sida 3" dokumentet_gäller_från="2026-10-01" slutdatum="ej angivet" uppladdat="2026-09-30" från_tidigare_svar="ja">',
+    );
+    expect(prompt).toContain('<källa nummer="2" titel="Utan metadata">');
+    expect(prompt).not.toContain("tills vidare");
+    expect(
+      buildSystemPrompt({ organization: "", assistant: "A." }, [
+        { index: 1, documentId: "d", title: "T", content: "x", location: null, validFrom: "2026-10-01", validUntil: "2026-12-31" },
+      ]),
+    ).toContain('dokumentet_gäller_från="2026-10-01" slutdatum="2026-12-31"');
   });
 
   it("adds a server-written length reminder after the sources, never the user's free text", () => {
@@ -57,7 +100,7 @@ describe("instruction layers", () => {
   });
 
   it("fixed source rules keep internal sources first and enable no web search by themselves", () => {
-    const [sources, , , content] = FIXED_RULES;
+    const [sources, , , , , content] = FIXED_RULES;
     expect(sources).toContain("uttryckligen har gjort tillgängliga och godkänt");
     expect(sources).toContain("ska godkända interna källor användas");
     expect(sources).toContain("får inte ersätta interna beslut eller erbjudanden");

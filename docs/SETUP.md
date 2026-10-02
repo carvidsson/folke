@@ -348,6 +348,10 @@ Under **Administration → AI och modeller → Modell per assistent** väljer du
 npm run check        # bland annat dataspärren, OpenAI-leverantören (fejkad klient) och källkontroll
 npm run test:db      # dataklasser, embeddings-spärr, hybridsökning och gränser i databasen (PGlite)
 npm run test:live    # samma spärrar mot utvecklingsprojektet (kräver FOLKE_ENVIRONMENT=development)
+# Konversationsmedveten retrieval (ADR-042): syntetiska kampanjdokument i folke-dev, riktiga OpenAI-anrop.
+# Använder Säljassistentens utkast om det finns (FOLKE_EVAL_SALJ=published för den publicerade texten).
+# Livetesterna tar bort säljutkast, så kör dem inte medan ett utkast granskas.
+node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.eval.config.mts tests/ai-eval/retrieval.eval.ts
 npm run test:ai-eval # 21 svenska testfall × 2 modeller med riktiga anrop, ca 0,05 USD
 # Publicerade instruktioner i folke-dev (läser instruktionerna, ändrar inget, bara godkända och syntetiska dokument):
 node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.eval.config.mts tests/ai-eval/published.eval.ts

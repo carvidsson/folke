@@ -25,6 +25,12 @@ export interface ContextChunk {
   snippet?: string | null;
   /** Data class of the source document (checked before external calls). */
   dataClass?: "internal" | "synthetic" | "approved";
+  /** Document metadata sent with the excerpt (dates as YYYY-MM-DD). */
+  validFrom?: string | null;
+  validUntil?: string | null;
+  uploadedAt?: string | null;
+  /** Re-read because an earlier answer in the conversation cited it. */
+  reused?: boolean;
 }
 
 export interface ChatCompletionInput {

@@ -124,8 +124,10 @@ export async function createDocument({
   assistantIds,
   chunks,
   reviewStatus = "approved",
+  validFrom = "2026-01-01",
   validUntil = null,
   dataClass = "internal",
+  locationLabel = "Stycke",
 }: {
   title: string;
   ownerGroupId: string;
@@ -133,7 +135,10 @@ export async function createDocument({
   assistantIds: string[];
   chunks: string[];
   reviewStatus?: "pending" | "approved" | "rejected" | "archived";
+  validFrom?: string;
   validUntil?: string | null;
+  /** Prefix for chunk locations, e.g. "Sida" gives "Sida 1", "Sida 2" … */
+  locationLabel?: string;
   /** "synthetic" may only be set by the server (service role), as here. */
   dataClass?: "internal" | "synthetic";
 }) {
@@ -153,7 +158,7 @@ export async function createDocument({
       internal_only_attested_at: new Date().toISOString(),
       processing_status: "ready",
       review_status: reviewStatus,
-      valid_from: "2026-01-01",
+      valid_from: validFrom,
       valid_until: validUntil,
       tags: ["syntetisk"],
       ai_data_class: dataClass,
@@ -166,7 +171,7 @@ export async function createDocument({
   const up = await admin.storage.from("documents").upload(path, Buffer.from(text), { contentType: "text/plain" });
   if (up.error) throw new Error(`upload: ${up.error.message}`);
   await admin.from("documents").update({ storage_path: path }).eq("id", doc.id);
-  await admin.from("document_chunks").insert(chunks.map((content, i) => ({ document_id: doc.id, chunk_index: i, content, location: `Stycke ${i + 1}` })));
+  await admin.from("document_chunks").insert(chunks.map((content, i) => ({ document_id: doc.id, chunk_index: i, content, location: `${locationLabel} ${i + 1}` })));
   await admin.from("document_assistants").insert(assistantIds.map((assistant_id) => ({ document_id: doc.id, assistant_id })));
   return { id: doc.id as string, path };
 }

@@ -47,6 +47,11 @@ export function verifyCitations(answer: string, contextSize: number): CitationRe
 const STAFF_SECTION = /^[ \t]*(?:#{1,6}[ \t]*)?\**Underlag för medarbetaren\**:?[ \t]*$/im;
 const MARKER = /[ \t]*\[\d{1,3}(?:\s*,\s*\d{1,3})*(?:(?:\s*[,;:]\s*|\s+)(?!\d)[^\]\n]{1,80})?\]/g;
 
+/** Removes all source markers, e.g. from earlier answers sent again as history. */
+export function stripCitationMarkers(text: string): string {
+  return text.replace(MARKER, "").replace(/[ \t]+([.,;:!?])/g, "$1");
+}
+
 /**
  * Customer-ready texts (fixed source rule): when an answer has the section
  * "Underlag för medarbetaren", no source markers may remain in the customer

@@ -87,6 +87,17 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Kort introduktion till Folke | ✅ |
 | Effekt och säkerhet mätt med riktiga anrop (ADR-041) | ✅ |
 
+## Konversationsmedveten retrieval ✅ i betan 2026-10-02
+
+| Del | Status |
+|---|---|
+| Följdfrågor söks med föregående fråga, och förra svarets källor läses om (ADR-042) | ✅ PGlite, enhetstester och utvärdering |
+| Större urval för breda frågor och spridning mellan dokument | ✅ |
+| Dokumentmetadata och dagens datum i prompten | ✅ |
+| Fasta regler: resonemang och delvisa svar, aldrig nya faktauppgifter | ✅ |
+| Säljassistentens nya instruktion (jämförelser, luckor, giltighet) | ✅ Publicerad i betan (folke) · utkast i folke-dev |
+| Migration `20261007090000_retrieval_context.sql` | ✅ folke-dev och folke |
+
 ## Senare
 
 - **Versionshistorik:** bevara publicerarens namn även när användarkontot tas bort (i dag blir det "Folke"). Mindre förbättring som inte ska försena introduktionen.

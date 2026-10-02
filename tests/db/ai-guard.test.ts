@@ -548,3 +548,79 @@ describe("AI request limits", () => {
     });
   });
 });
+
+describe("retrieval context for conversations (ADR-042)", () => {
+  type Row = { chunk_id: number; document_id: string; chunk_index: number; valid_from: string; uploaded_at: string; ai_data_class: string };
+  const search = (tx: Transaction, assistant: string, query: string, dataClass: string | null = "synthetic") =>
+    tx
+      .query<Row>(
+        `select chunk_id, document_id, chunk_index, valid_from::text, uploaded_at::text, ai_data_class
+         from public.search_document_context($1, $2, $3::extensions.halfvec, $4, $5, 60)`,
+        [assistant, query, vec(1), MODEL, dataClass],
+      )
+      .then((r) => r.rows);
+  const reread = (tx: Transaction, assistant: string, ids: number[], dataClass: string | null = "synthetic") =>
+    tx
+      .query<Row>(`select chunk_id, document_id from public.get_document_context_chunks($1, $2::bigint[], $3)`, [
+        assistant,
+        ids,
+        dataClass,
+      ])
+      .then((r) => r.rows);
+  const chunkIds = async (documentId: string) =>
+    (
+      await db.query<{ id: number }>(`select id from public.document_chunks where document_id = $1 order by chunk_index`, [
+        documentId,
+      ])
+    ).rows.map((r) => Number(r.id));
+
+  it("search returns document metadata with each chunk and respects the data class", async () => {
+    await asUser(db, U.mechanic, async (tx) => {
+      const hits = await search(tx, fx.assistants.warranty, "rostskyddsgaranti Ekorre");
+      expect(hits.length).toBe(2);
+      expect(hits.every((h) => h.document_id === SYN.warranty && h.ai_data_class === "synthetic")).toBe(true);
+      expect(hits.map((h) => h.chunk_index).sort()).toEqual([0, 1]);
+      expect(hits[0].valid_from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(hits[0].uploaded_at).toBeTruthy();
+      expect(await search(tx, fx.assistants.warranty, "rostskyddsgaranti", "approved")).toEqual([]);
+    });
+  });
+
+  it("re-reads cited chunks only under the same rules as search", async () => {
+    const warranty = await chunkIds(SYN.warranty);
+    const sales = await chunkIds(SYN.sales);
+    await asUser(db, U.mechanic, async (tx) => {
+      expect((await reread(tx, fx.assistants.warranty, warranty)).map((r) => Number(r.chunk_id)).sort()).toEqual(
+        [...warranty].sort(),
+      );
+      // Another group's document, another assistant, or the wrong data class: nothing.
+      expect(await reread(tx, fx.assistants.warranty, sales)).toEqual([]);
+      expect(await reread(tx, fx.assistants.sales, sales)).toEqual([]);
+      expect(await reread(tx, fx.assistants.warranty, warranty, "approved")).toEqual([]);
+    });
+    await asUser(db, U.loner, async (tx) => {
+      expect(await reread(tx, fx.assistants.warranty, warranty)).toEqual([]);
+    });
+  });
+
+  it("an expired document is neither found nor re-read", async () => {
+    const warranty = await chunkIds(SYN.warranty);
+    await asUser(db, U.mechanic, async (tx) => {
+      await tx.exec("set local role postgres");
+      await tx.query(`update public.documents set valid_from = '2026-01-01', valid_until = '2026-01-31' where id = $1`, [
+        SYN.warranty,
+      ]);
+      await actAs(tx, U.mechanic);
+      expect(await search(tx, fx.assistants.warranty, "rostskyddsgaranti Ekorre")).toEqual([]);
+      expect(await reread(tx, fx.assistants.warranty, warranty)).toEqual([]);
+    });
+  });
+
+  it("is not available to anonymous visitors", async () => {
+    const { rows } = await db.query<{ search: boolean; reread: boolean }>(
+      `select has_function_privilege('anon', 'public.search_document_context(uuid, text, extensions.halfvec, text, text, int)', 'execute') as search,
+              has_function_privilege('anon', 'public.get_document_context_chunks(uuid, bigint[], text)', 'execute') as reread`,
+    );
+    expect(rows[0]).toEqual({ search: false, reread: false });
+  });
+});

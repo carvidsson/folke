@@ -1,7 +1,8 @@
 import "server-only";
 
 import type { SourceReference } from "@/lib/domain/types";
-import { citedSources, toContext, type SearchRow } from "@/server/chat/turn";
+import { retrieveContext } from "@/server/chat/retrieval";
+import { citedSources } from "@/server/chat/turn";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
 import { verifyCitations } from "./citations";
@@ -31,8 +32,6 @@ import { recordChatUsage } from "./usage";
  * user's budget and limits like any AI call and is tagged instruction_test.
  * Personal preferences are fixed examples, never a real user's settings.
  */
-
-const CONTEXT_LIMIT = 6;
 
 export interface TestAnswer {
   answer: string;
@@ -168,23 +167,21 @@ export async function runSideBySideTest(input: {
     return { ok: false, error: second.message };
   }
 
-  // One retrieval for both answers, under the user's own RLS.
-  const embedding = await embedQuery(input.question, {
-    userId: input.userId,
+  // One retrieval for both answers, under the user's own RLS (same as chat).
+  const { context, sources, stats } = await retrieveContext(supabase, {
     assistantId: input.assistantId,
-    conversationId: null,
-    dataClass: "internal",
-    purpose: "instruction_test",
+    message: input.question,
+    history: [],
+    dataClass: "approved",
+    embed: (text) =>
+      embedQuery(text, {
+        userId: input.userId,
+        assistantId: input.assistantId,
+        conversationId: null,
+        dataClass: "internal",
+        purpose: "instruction_test",
+      }),
   });
-  const { data: rows } = await supabase.rpc("search_document_chunks_hybrid", {
-    p_assistant_id: input.assistantId,
-    p_query: input.question,
-    p_embedding: embedding?.vector ?? null,
-    p_embedding_model: embedding?.model ?? null,
-    p_data_class: "approved",
-    p_limit: CONTEXT_LIMIT,
-  });
-  const { context, sources } = toContext((rows ?? []) as SearchRow[]);
 
   try {
     assertExternalAllowed({ external: true, conversationClass: "internal", userHasTestAccess: false, context });
@@ -198,5 +195,5 @@ export async function runSideBySideTest(input: {
     answer(input.userId, input.assistantId, model, input.a, context, sources, input.question, first.requestId),
     answer(input.userId, input.assistantId, model, input.b, context, sources, input.question, second.requestId),
   ]);
-  return { ok: true, result: { model, basis: sources, usedVectorSearch: Boolean(embedding), a, b } };
+  return { ok: true, result: { model, basis: sources, usedVectorSearch: stats.usedVectorSearch, a, b } };
 }

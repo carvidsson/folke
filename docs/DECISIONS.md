@@ -243,6 +243,19 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 
 **Mätning (publicerade instruktioner, gpt-6-luna, tre körningar):** svarslängd kort, balanserat och utförligt gav 70, 82 och 120 ord. Formella kännetecken fanns i 3 av 3 formella mejl och i 0 av 3 personliga. "Håll mejl relativt korta" gav −17 %, och vi-form användes i 2 av 3 mejl. Eget önskemål följdes i 3 av 3. Obligatorisk struktur behölls i 3 av 3, och fientliga önskemål avvisades i 3 av 3.
 
+### ADR-042 – Konversationsmedveten retrieval och dokumentmetadata
+
+**Bakgrund:** i betan hämtade varje fråga 6 textbitar utifrån bara det senaste meddelandet. Följdfrågor tappade källorna bakom förra svaret, breda frågor och jämförelser fick för lite underlag, ett dokument kunde ta hela kontexten och modellen saknade dagens datum och dokumentens giltighet.
+
+**Beslut:**
+- **Följdfrågor:** korta frågor och frågor som syftar bakåt söks tillsammans med föregående fråga. Textbitarna som förra svaret citerade läses om från databasen (`get_document_context_chunks`, samma RLS, assistent och dataklass som sökningen). Ett tidigare svar är aldrig en källa i sig, och källmarkörerna tas bort ur historiken.
+- **Omfång:** breda frågor (översikter, jämförelser, "alla …") får upp till 60 textbitar och 40 000 tecken, och smala upp till 20 textbitar och 16 000 tecken. Klassningen bygger på generella svenska formuleringar, inga märken eller modeller.
+- **Spridning:** urvalet görs i Folke ur upp till 150 kandidater (`search_document_context`). Ett dokument får högst 60 % av utrymmet så länge andra relevanta dokument har träffar. Ett dokument räknas som relevant om det har en träff högt upp i rankningen. Irrelevanta dokument tas aldrig med för spridningens skull.
+- **Metadata:** varje källa skickas med titel, sida, dokumentets giltighet och uppladdningsdatum, och prompten innehåller dagens datum (Europe/Stockholm). Giltighetsperioder i texten gäller den kampanj de står vid.
+- **Fasta regler:** faktauppgifter ska stödjas av källor för den aktuella frågan eller av tidigare verifierade källor som återhämtats från samma konversation. Folke får resonera, jämföra och rekommendera utifrån verifierade uppgifter men inte skapa nya faktauppgifter. Saknas en uppgift ska just den markeras och resten besvaras.
+
+**Mätning (`tests/ai-eval/retrieval.eval.ts`, syntetiska dokument i folke-dev, gpt-6-luna, tre körningar):** 22 av 22 kvalitetskontroller i 3 av 3 körningar, och alla kontroller av retrieval, källhänvisningar och utgångna kampanjer var godkända. Smala frågor fick cirka 4 800 tokens in och breda cirka 6 700. Retrieval tog cirka 0,5 sekunder inklusive embedding.
+
 ---
 
 ## Öppna beslut

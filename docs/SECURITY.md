@@ -99,6 +99,12 @@ Begränsning: Supabase Auth, Storage och PostgREST körs inte i PGlite. Därför
 
 **MVP 0.3:** `tests/db/ai-guard.test.ts` (25 tester) täcker dataklasser, AI-testbehörighet, embeddings-spärren, hybridsökning med RLS, gränser och modellval. Samma spärrar testas live i `tests/live/ai.test.ts`, som bara körs mot utvecklingsprojektet. Enhetstester täcker routingen, slutkontrollen, OpenAI-leverantören mot en fejkad klient (parametrar, användning och felmappning), källkontrollen och historikfiltret. `npm run test:ai-eval` kör 21 svenska fall med riktiga anrop, bland dem tre injektionsfall, ett behörighetsfall och två giltighetsfall.
 
+**Retrieval i konversationer (ADR-042):**
+- `search_document_context` och `get_document_context_chunks` är SECURITY INVOKER, får inte köras av `anon` och följer samma RLS som tidigare. Det betyder grupper, assistent, granskning, giltighet och dataklass.
+- Textbitar från ett tidigare svar läses om under samma regler. Om ett dokument har återkallats, gått ut eller inte längre delas med användaren följer det därför inte med.
+- Tidigare svar skickas aldrig som källor, och deras källmarkörer tas bort ur historiken.
+- Täcks av `tests/db/ai-guard.test.ts` (4 tester) och `tests/ai-eval/retrieval.eval.ts`. Utvärderingen kontrollerar bland annat att utgångna dokument aldrig hamnar i kontexten.
+
 ## Extern AI (OpenAI)
 
 **Policy (ADR-031, ADR-036):** inga dokument är godkända för extern AI-behandling som standard. I folke-dev (`approved-documents`) får en systemadministratör godkänna enskilda dokument. Då skickas deras utdrag och embeddings, samt frågor och svar i vanliga konversationer, till OpenAI. Ej godkända dokument skickas aldrig. Pilotprojektet är i mockläge. Syntetiska testdata används för automatiserade tester.

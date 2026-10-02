@@ -51,6 +51,17 @@ describe("history after revoked access", () => {
     expect(result.map((m) => m.content)).toEqual(["Fråga 1", "Svar från dokument A", "Fråga 2", "Svar utan källor"]);
   });
 
+  it("removes source markers from earlier answers, whose numbers no longer apply", () => {
+    const result = filterHistory(
+      [
+        { role: "user", content: "Fråga [1]", sources: null },
+        { role: "assistant", content: "Pris 3 495 kr/mån [1]. Ränta 3,9 % [2, s. 4].", sources: [] },
+      ],
+      new Set(),
+    );
+    expect(result.map((m) => m.content)).toEqual(["Fråga [1]", "Pris 3 495 kr/mån. Ränta 3,9 %."]);
+  });
+
   it("never sends stored source metadata to the model", () => {
     for (const m of filterHistory(history, new Set(["A", "B"]))) {
       expect(Object.keys(m).sort()).toEqual(["content", "role"]);

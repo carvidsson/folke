@@ -1,6 +1,8 @@
 import "server-only";
 
 import type { SourceReference } from "@/lib/domain/types";
+import { stripCitationMarkers } from "@/server/ai/citations";
+import { stockholmDate } from "@/server/ai/prompt";
 import type { ContextChunk, ProviderMessage } from "@/server/ai/types";
 
 /**
@@ -15,7 +17,14 @@ export interface SearchRow {
   content: string;
   location: string | null;
   ai_data_class: "internal" | "synthetic" | "approved";
-  snippet: string | null;
+  snippet?: string | null;
+  /** Document metadata (search_document_context). */
+  chunk_index?: number;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  uploaded_at?: string | null;
+  /** Re-read because an earlier answer in the conversation cited it. */
+  reused?: boolean;
 }
 
 /** Query-focused excerpt for source cards (falls back to the chunk start). */
@@ -34,12 +43,16 @@ export function toContext(rows: SearchRow[]): { context: ContextChunk[]; sources
       location: c.location,
       snippet: c.snippet?.trim() || null,
       dataClass: c.ai_data_class,
+      validFrom: c.valid_from ?? null,
+      validUntil: c.valid_until ?? null,
+      uploadedAt: c.uploaded_at ? stockholmDate(new Date(c.uploaded_at)) : null,
+      reused: c.reused ?? false,
     })),
     sources: rows.map((c) => ({
       id: String(c.chunk_id),
       documentId: c.document_id,
       title: c.title,
-      excerpt: excerptFor(c.snippet, c.content),
+      excerpt: excerptFor(c.snippet ?? null, c.content),
       location: c.location,
     })),
   };
@@ -53,11 +66,15 @@ export interface HistoryRow extends ProviderMessage {
  * Earlier answers are only sent again if every document they were based on
  * is still readable by the user. Otherwise a revoked or removed document
  * could reach the model through an old answer.
+ *
+ * Source markers are removed from earlier answers: their numbers referred
+ * to that turn's sources, and an earlier answer is never a source in itself
+ * (the chunks it cited are re-read instead, see ./retrieval.ts).
  */
 export function filterHistory(rows: HistoryRow[], readableDocumentIds: Set<string>): ProviderMessage[] {
   return rows
     .filter((m) => m.role !== "assistant" || (m.sources ?? []).every((s) => readableDocumentIds.has(s.documentId)))
-    .map(({ role, content }) => ({ role, content }));
+    .map(({ role, content }) => ({ role, content: role === "assistant" ? stripCitationMarkers(content) : content }));
 }
 
 /** Sources of the cited excerpts, in citation order. */

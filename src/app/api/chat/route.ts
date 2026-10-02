@@ -18,7 +18,8 @@ import type { UsageReport } from "@/server/ai/types";
 import { recordChatUsage } from "@/server/ai/usage";
 import { logSecurityEvent } from "@/server/audit";
 import { getApiSession } from "@/server/auth/session";
-import { citedSources, filterHistory, toContext, type HistoryRow, type SearchRow } from "@/server/chat/turn";
+import { retrieveContext } from "@/server/chat/retrieval";
+import { citedSources, filterHistory, type HistoryRow } from "@/server/chat/turn";
 import { getInstructionsForAuthorizedChat, getMyAssistant } from "@/server/data/assistants";
 import { getMyAIPreferences, getOrganizationInstructionsForChat } from "@/server/data/instructions";
 import { createSupabaseServerClient } from "@/server/supabase/server";
@@ -38,7 +39,6 @@ import { createSupabaseServerClient } from "@/server/supabase/server";
  */
 
 const HISTORY_ROWS = 30;
-const CONTEXT_LIMIT = 6;
 
 export const maxDuration = 60;
 
@@ -136,34 +136,33 @@ export async function POST(request: Request) {
     return jsonError("Meddelandet kunde inte sparas", 500);
   }
 
-  // --- Retrieval and history (both under the user's RLS) -------------------
-  const queryEmbedding = provider.external
-    ? await embedQuery(
-        message.content,
-        { userId, assistantId: assistant.id, conversationId: conversation.id, dataClass: conversation.data_class },
-        request.signal,
-      )
-    : null;
-
-  const [{ data: historyRows }, { data: chunkRows }] = await Promise.all([
-    supabase
-      .from("messages")
-      .select("role, content, sources")
-      .eq("conversation_id", conversation.id)
-      .order("created_at", { ascending: false })
-      .limit(HISTORY_ROWS)
-      .returns<HistoryRow[]>(),
-    supabase.rpc("search_document_chunks_hybrid", {
-      p_assistant_id: assistant.id,
-      p_query: message.content,
-      p_embedding: queryEmbedding?.vector ?? null,
-      p_embedding_model: queryEmbedding?.model ?? null,
-      p_data_class: retrievalDataClass(conversation.data_class, provider.external),
-      p_limit: CONTEXT_LIMIT,
-    }),
-  ]);
-
+  // --- History and retrieval (both under the user's RLS) -------------------
+  // History first: a follow-up question is searched together with the
+  // previous one, and the chunks the previous answer cited are re-read.
+  const { data: historyRows } = await supabase
+    .from("messages")
+    .select("role, content, sources")
+    .eq("conversation_id", conversation.id)
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_ROWS)
+    .returns<HistoryRow[]>();
   const rows = (historyRows ?? []).reverse();
+
+  const { context, sources } = await retrieveContext(supabase, {
+    assistantId: assistant.id,
+    message: message.content,
+    history: rows,
+    dataClass: retrievalDataClass(conversation.data_class, provider.external),
+    embed: provider.external
+      ? (text) =>
+          embedQuery(
+            text,
+            { userId, assistantId: assistant.id, conversationId: conversation.id, dataClass: conversation.data_class },
+            request.signal,
+          )
+      : null,
+  });
+
   const referenced = [...new Set(rows.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
   // Earlier answers are only sent again while their documents are still
   // readable – and, for external calls, still approved (revocation).
@@ -175,7 +174,6 @@ export async function POST(request: Request) {
     (d) => !allowedClasses || (allowedClasses as string[]).includes(d.ai_data_class),
   );
   const history = limitHistory(filterHistory(rows, new Set(usable.map((d) => d.id))));
-  const { context, sources } = toContext((chunkRows ?? []) as SearchRow[]);
 
   // Instruction layers: organization → assistant → the user's own preferences.
   const [organizationInstructions, assistantInstructions, preferences] = await Promise.all([
