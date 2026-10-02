@@ -1,12 +1,13 @@
 "use client";
 
 import { Check, Copy } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { WAITING_TEXT_INTERVAL_MS, waitingText, type WaitingPhase } from "@/lib/chat/waiting-texts";
 import type { Assistant, Message } from "@/lib/domain/types";
 
 import { AttachmentChip } from "./attachment-chip";
@@ -47,9 +48,12 @@ export function AssistantMessage({
   assistant,
   pending = false,
   streaming = false,
+  waitingPhase = "searching",
 }: {
   message: Message;
   assistant: Assistant;
+  /** What Folke is doing while waiting for the first token. */
+  waitingPhase?: WaitingPhase;
   /** Waiting for the first token. */
   pending?: boolean;
   /** Tokens are still arriving. */
@@ -61,7 +65,8 @@ export function AssistantMessage({
       <div className="min-w-0 flex-1">
         <p className="sr-only">{assistant.name} svarar:</p>
         {pending ? (
-          <TypingIndicator label="Söker i kunskapsbanken…" />
+          // Keyed by phase: a new phase starts calmly on its own text and timer.
+          <TypingIndicator key={waitingPhase} phase={waitingPhase} seed={message.id} />
         ) : (
           <>
             <Markdown idPrefix={message.id}>{message.content}</Markdown>
@@ -74,9 +79,22 @@ export function AssistantMessage({
   );
 }
 
-function TypingIndicator({ label }: { label: string }) {
+/**
+ * Folke's waiting text: varies between answers and changes calmly during a
+ * long wait. Screen readers get one stable status instead of every change.
+ */
+function TypingIndicator({ phase, seed }: { phase: WaitingPhase; seed: string }) {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setStep((s) => s + 1), WAITING_TEXT_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
+  const label = waitingText(phase, seed, step);
   return (
-    <div className="flex h-7 items-center gap-3 text-sm text-muted-foreground" role="status">
+    <div className="flex h-7 items-center gap-3 text-sm text-muted-foreground">
+      <span role="status" className="sr-only">
+        Folke arbetar med svaret
+      </span>
       <span className="flex gap-1" aria-hidden>
         {[0, 1, 2].map((i) => (
           <span
@@ -86,7 +104,9 @@ function TypingIndicator({ label }: { label: string }) {
           />
         ))}
       </span>
-      {label}
+      <span key={label} aria-hidden className="animate-in fade-in duration-500">
+        {label}
+      </span>
     </div>
   );
 }

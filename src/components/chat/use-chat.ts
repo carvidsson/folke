@@ -5,6 +5,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { streamChat } from "@/lib/chat/client";
 import type { ConversationMode } from "@/lib/chat/protocol";
+import type { WaitingPhase } from "@/lib/chat/waiting-texts";
 import type { Attachment, Message } from "@/lib/domain/types";
 
 export type ChatStatus = "idle" | "submitted" | "streaming" | "error";
@@ -43,6 +44,16 @@ export function useChat({
   const lastOutgoing = useRef<OutgoingMessage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [engine, setEngine] = useState<{ provider: "mock" | "openai"; model: string | null } | null>(null);
+  /**
+   * What the server is doing before the first words: searching (the stream
+   * starts only after retrieval and attachment reading), then the model
+   * working with the retrieved excerpts.
+   */
+  const [waiting, setWaiting] = useState<{ searchDone: boolean; attachments: boolean; sources: number }>({
+    searchDone: false,
+    attachments: false,
+    sources: 0,
+  });
 
   const send = useCallback(
     async (outgoing: OutgoingMessage, { isRetry = false } = {}) => {
@@ -58,6 +69,7 @@ export function useChat({
       setMessages((all) => [...(isRetry ? all : [...all, userMessage]), reply]);
       setStatus("submitted");
       setError(null);
+      setWaiting({ searchDone: false, attachments: outgoing.attachments.length > 0, sources: 0 });
 
       const update = (fn: (m: Message) => Message) =>
         setMessages((all) => all.map((m) => (m.id === reply.id ? fn(m) : m)));
@@ -79,6 +91,7 @@ export function useChat({
           },
           (event) => {
             if (event.type === "conversation") {
+              setWaiting((w) => ({ ...w, searchDone: true }));
               setEngine({ provider: event.provider, model: event.model });
               if (event.created) {
                 conversationId.current = event.conversationId;
@@ -86,7 +99,10 @@ export function useChat({
                 window.history.replaceState(null, "", `/chat/${event.conversationId}`);
               }
             }
-            if (event.type === "sources") update((m) => ({ ...m, sources: event.sources }));
+            if (event.type === "sources") {
+              setWaiting((w) => ({ ...w, sources: event.sources.length }));
+              update((m) => ({ ...m, sources: event.sources }));
+            }
             if (event.type === "text") {
               setStatus("streaming");
               update((m) => ({ ...m, content: m.content + event.delta }));
@@ -130,12 +146,21 @@ export function useChat({
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
+  const waitingPhase: WaitingPhase = !waiting.searchDone
+    ? waiting.attachments
+      ? "attachments"
+      : "searching"
+    : waiting.sources >= 2
+      ? "weighing"
+      : "composing";
+
   return {
     messages,
     status,
     error,
     isBusy: status === "submitted" || status === "streaming",
     engine,
+    waitingPhase,
     send: (outgoing: OutgoingMessage) => void send(outgoing),
     retry,
     stop,

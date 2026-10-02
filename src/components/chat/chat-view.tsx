@@ -176,6 +176,7 @@ export function ChatView({
                   message={m}
                   assistant={assistant}
                   pending={isLast && status === "submitted"}
+                  waitingPhase={chat.waitingPhase}
                   streaming={isLast && status === "streaming"}
                 />
               );
