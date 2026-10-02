@@ -256,6 +256,28 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 
 **Mätning (`tests/ai-eval/retrieval.eval.ts`, syntetiska dokument i folke-dev, gpt-6-luna, tre körningar):** 22 av 22 kvalitetskontroller i 3 av 3 körningar, och alla kontroller av retrieval, källhänvisningar och utgångna kampanjer var godkända. Smala frågor fick cirka 4 800 tokens in och breda cirka 6 700. Retrieval tog cirka 0,5 sekunder inklusive embedding.
 
+### ADR-043 – Källor före tidigare påståenden, giltighet i flera nivåer och kompakta breda svar
+
+**Bakgrund (betatest 2026-10-02):**
+- Ett svar påstod att verifierade Q4-uppgifter saknades. Källorna fanns i kontexten, men historiken innehöll två tidigare felaktiga "rättelser".
+- En kvarglömd Q3-period i en Q4-lathund fick dokumentets Q4-priser att avfärdas.
+- Breda svar kapades vid 1 200 output-tokens, där resonemangstokens räknas in.
+- Chatten gick att scrolla långt förbi slutet.
+
+**Beslut:**
+- **Källor före tidigare svar:** finns en uppgift i källorna gäller den, även om ett tidigare svar påstod att den saknades. Folke får aldrig påstå att något saknas utan att ha kontrollerat källorna.
+- **Källöverföring:** källor bärs med från de två senaste svaren som har källor, högst 16 textbitar. Ett svar som kapades innan det citerade något bryter därför inte kedjan.
+- **Giltighet:** den mest specifika tydliga uppgiften och dokumentets sammanhang avgör. Ett entydigt passerat slutdatum gör ett erbjudande inaktuellt även om dokumentet gäller längre. Motsäger nivåerna varandra vägs hela dokumentet. Vid en verklig olöst motsägelse redovisas det underlaget sammantaget stödjer, med en kontrollpunkt.
+- **Breda frågor:** en servergenererad anvisning om svarsform efter källorna: jämförbara par eller grupper, en rad per par, cirka 300–450 ord och erbjudande om fördjupning. `FOLKE_AI_MAX_OUTPUT_TOKENS` höjs från 1 200 till 2 000 så att resonemanget inte tränger undan svaret. Meddelandet vid kapning föreslår att användaren ber Folke fortsätta.
+- **Loggning:** retrievalstatistik loggas utan innehåll (omfång, följdfråga, antal, återhämtade id:n).
+- **Chatten:** scrollytan är `relative` och chattvyn `overflow-hidden`. Annars spiller absolut positionerat innehåll i meddelandena, som `sr-only`, över till sidans egen scrollyta.
+- Retrievalens budgetar, spridning mellan dokument och metadata från ADR-042 är oförändrade.
+
+**Mätning (`tests/ai-eval/retrieval.eval.ts`, gpt-6-luna, tre körningar):**
+- 33 av 33 kvalitetskontroller i 3 av 3 körningar, och alla hårda kontroller var godkända.
+- Breda svar: 0 av 21 kapade, i snitt 243 ord och cirka 635 output-tokens (högst 1 089).
+- Webbläsartest av chatten: 0 px extra sidhöjd även i lång konversation med tabeller.
+
 ---
 
 ## Öppna beslut

@@ -8,7 +8,7 @@ import { assertExternalAllowed } from "@/server/ai/guard";
 import { embeddingModel, resolveChatModel } from "@/server/ai/models";
 import { chatCostUsd, embeddingCostUsd } from "@/server/ai/pricing";
 import { buildSystemPrompt, limitHistory, stockholmDate } from "@/server/ai/prompt";
-import { createEmbeddings, openAIProvider } from "@/server/ai/providers/openai";
+import { TRUNCATED_NOTE, createEmbeddings, openAIProvider } from "@/server/ai/providers/openai";
 import type { ContextChunk, UsageReport } from "@/server/ai/types";
 import { retrieveContext, type RetrievalStats } from "@/server/chat/retrieval";
 import { citedSources, filterHistory, type HistoryRow } from "@/server/chat/turn";
@@ -48,6 +48,8 @@ const TODAY = stockholmDate();
 const day = (offset: number) => stockholmDate(new Date(Date.now() + offset * 86_400_000));
 const CURRENT = { from: day(-1), to: day(90) };
 const EXPIRED = { from: day(-120), to: day(-20) };
+/** A leftover older period in a section that is labelled with the current quarter. */
+const STALE = { from: day(-101), to: day(-2) };
 
 const WORD = "[\\p{L}\\p{N}]";
 const has = (text: string, word: string) => new RegExp(`(?<!${WORD})${word}(?!${WORD})`, "iu").test(text);
@@ -119,6 +121,7 @@ const solbergPages = [
   ...solbergNews.slice(0, 6),
   `Q4-kampanjöversikt privatleasing. Gäller beställningar ${CURRENT.from} till ${CURRENT.to}. Priserna gäller privatpersoner och inkluderar moms.`,
   ...solbergModels,
+  `Lathund privatleasing Q4. Kampanjperiod: ${STALE.from} till ${STALE.to}. Rekommenderade priser, varje återförsäljare sätter sitt eget pris: Solberg Polar 5 495 kr/mån, Solberg Ved 4 395 kr/mån, Solberg Mini 2 895 kr/mån.`,
   "Solberg Service Plus. Service och slitdelar i 36 månader ingår i privatleasingkampanjerna för Ved. För övriga modeller kan avtalet köpas till.",
   ...solbergNews.slice(6),
 ];
@@ -182,6 +185,12 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
       }
     }
 
+    const { data: norrvikChunks } = await svc.from("document_chunks").select("id, content").eq("document_id", docs.norrvik);
+    for (const [key, c] of Object.entries(CAMPAIGNS)) {
+      const hit = ((norrvikChunks ?? []) as { id: number; content: string }[]).find((x) => x.content.includes(c.price) && x.content.includes(c.model));
+      if (hit) chunkIds[key as keyof typeof CAMPAIGNS] = hit.id;
+    }
+
     organization = ((await svc.from("organization_instructions").select("content").single()).data?.content as string) ?? "";
     const draft = (await svc.from("instruction_drafts").select("content").eq("assistant_id", sales).maybeSingle()).data;
     const published = (await svc.from("assistants").select("instructions").eq("id", sales).single()).data!.instructions as string;
@@ -193,6 +202,8 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
   afterAll(async () => {
     await cleanup();
   }, 300_000);
+
+  const chunkIds: Partial<Record<keyof typeof CAMPAIGNS, number>> = {};
 
   async function ask(rows: HistoryRow[], question: string): Promise<Turn> {
     rows.push({ role: "user", content: question, sources: null });
@@ -217,7 +228,7 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
     let usage: UsageReport | null = null;
     const t0 = Date.now();
     for await (const e of openAIProvider.streamChat({
-      system: buildSystemPrompt({ organization, assistant: instructions }, context),
+      system: buildSystemPrompt({ organization, assistant: instructions }, context, { broad: stats.scope === "broad" }),
       messages: sentHistory,
       context,
       model: resolveChatModel(null).id,
@@ -242,7 +253,7 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
   const NORRVIK = ["fjord", "as", "kust", "stad"] as const;
   const SOLBERG = ["polar", "polarSport", "ved", "mini", "kvarts"] as const;
   const ALL = [...NORRVIK, ...SOLBERG];
-  const EXPIRY = /avslutad|gått ut|passerat|gällde|inte längre|upphört|utgått|inte aktuell|har löpt ut|tidigare kampanj|slutade/i;
+  const EXPIRY = /avslutad|gått ut|gick ut|passerat|gällde|inte längre|upphört|utgått|inte (som )?aktuell|räknas inte|har löpt ut|tidigare kampanj|slutade/i;
   /** An expired price may only appear next to words saying it has expired. */
   const presentsExpiredAsCurrent = (answer: string, price: string) => {
     for (let at = answer.indexOf(price); at >= 0; at = answer.indexOf(price, at + 1)) {
@@ -268,7 +279,12 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
       if (!refs.length) continue;
       for (const price of sentence.match(/\d[\d ]{2,}(?= kr)/g) ?? []) {
         const chunks = refs.map((n) => byId.get(t.cited[n - 1]?.id ?? "")).filter(Boolean) as ContextChunk[];
-        if (chunks.length && !chunks.some((c) => c.content.includes(price.trim()))) problems.push(`${price.trim()} kr står inte i källa [${refs.join(",")}]`);
+        if (!chunks.length || chunks.some((c) => c.content.includes(price.trim()))) continue;
+        // A difference the model calculated from two cited prices is reasoning, not a new fact.
+        const amounts = chunks.flatMap((c) => (c.content.match(/\d[\d ]{2,}(?= kr)/g) ?? []).map((p) => Number(p.replace(/\s/g, ""))));
+        const value = Number(price.replace(/\s/g, ""));
+        if (amounts.some((a) => amounts.some((b) => a - b === value))) continue;
+        problems.push(`${price.trim()} kr står inte i källa [${refs.join(",")}]`);
       }
     }
     return problems;
@@ -281,6 +297,12 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
     const turns: Turn[] = [];
     const pass = (name: string, ok: boolean) => {
       quality[name] = (quality[name] ?? 0) + (ok ? 1 : 0);
+    };
+    /** Broad answers: not cut off, compact, with sources. */
+    const compact = (id: string, t: Turn) => {
+      pass(`${id}: kapas inte`, !t.answer.includes("avbröts här"));
+      pass(`${id}: kompakt (högst 550 ord)`, t.answer.split(/\s+/).filter(Boolean).length <= 550);
+      pass(`${id}: har källhänvisningar`, t.cited.length > 0);
     };
     const must = (name: string, ok: boolean, detail = "") => {
       if (!ok) hard.push(`${name}${detail ? `: ${detail}` : ""}`);
@@ -324,6 +346,7 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
         must("3: bred fråga", t3.stats.scope === "broad");
         must("3: båda dokumenten i kontexten", t3.stats.documents >= 2);
         must("3: kampanjsidor från båda märkena", coverage(t3, [...NORRVIK]) >= 3 && coverage(t3, [...SOLBERG]) >= 4, `${coverage(t3, [...NORRVIK])}/4, ${coverage(t3, [...SOLBERG])}/5`);
+        compact("3", t3);
         pass("3: minst 3 modeller per märke", mentioned(t3, [...NORRVIK]) >= 3 && mentioned(t3, [...SOLBERG]) >= 3);
         pass("3: ställer SUV mot SUV (Ås och Polar)", has(t3.answer, "Ås") && has(t3.answer, "Polar"));
         pass("3: påstår inte att något underlag saknar kampanjer", !/(saknar|innehåller inga) (relevanta )?kampanj/i.test(t3.answer));
@@ -335,7 +358,8 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
         common(t4);
         must("4: bred fråga", t4.stats.scope === "broad");
         must("4: minst 8 av 9 kampanjsidor i kontexten", coverage(t4, ALL) >= 8, `${coverage(t4, ALL)}/9`);
-        pass("4: nämner minst 8 av 9 modeller", mentioned(t4, ALL) >= 8);
+        compact("4", t4);
+        pass("4: nämner minst 7 av 9 modeller i den kompakta översikten", mentioned(t4, ALL) >= 7);
         pass("4: sommarkampanjen inte som aktuell", !presentsExpiredAsCurrent(t4.answer, EXPIRED_PRICE));
       }
 
@@ -355,6 +379,35 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
         common(t6);
         pass("6: nämner den aktuella kampanjen (3 495 kr)", t6.answer.includes("3 495"));
         pass("6: sommarkampanjen inte som aktuell", !presentsExpiredAsCurrent(t6.answer, EXPIRED_PRICE));
+      }
+
+      // 8: an earlier answer wrongly said a verified fact was missing, and the
+      // latest answer was cut off without sources. Verified sources must win.
+      {
+        const src = (key: keyof typeof CAMPAIGNS): SourceReference => ({ id: String(chunkIds[key]), documentId: docs.norrvik, title: "Test – live Kampanjöversikt oktober", excerpt: "", location: null });
+        const rows: HistoryRow[] = [
+          { role: "user", content: "Vilka kampanjer finns på Norrvik?", sources: null },
+          { role: "assistant", content: "Norrvik Ås har privatleasing 5 295 kr/mån [1]. Norrvik Fjord har 3 495 kr/mån [2].", sources: [src("as"), src("fjord")] },
+          { role: "user", content: "Vilken passar en barnfamilj?", sources: null },
+          { role: "assistant", content: "Jag behöver rätta mitt förra svar: underlaget styrker inte uppgifterna om Norrvik Ås. De ska inte ses som verifierade.", sources: [] },
+          { role: "user", content: "Gör en lång jämförelse av allt", sources: null },
+          { role: "assistant", content: `| Modell | Erbjudande |\n|---|---|\n| Fjord | 3 4${TRUNCATED_NOTE}`, sources: [] },
+        ];
+        const t8 = await ask(rows, "okej, jag vill jämföra samtliga kampanjer mot varandra");
+        common(t8);
+        must("8: Ås-sidan återhämtad trots två svar utan källor", t8.context.some((c, i) => t8.sources[i].id === String(chunkIds.as) && c.reused));
+        pass("8: använder den verifierade Ås-uppgiften (5 295 kr)", t8.answer.includes("5 295"));
+        pass("8: upprepar inte den felaktiga rättelsen", !/(styrker inte|inte (ses som )?verifierad|saknar|inte bekräfta)[^.|]{0,80}Ås|Ås[^.|]{0,80}(saknas|styrks inte|inte (ses som )?verifierad)|rätta mi(tt|na) (förra|tidigare) svar/i.test(t8.answer));
+      }
+
+      // 9: a section labelled with the current quarter keeps an older date,
+      // while the document and its Q4 overview say the offers are current.
+      {
+        const t9 = await ask([], "Vilka privatleasingpriser gäller för Solberg just nu?");
+        common(t9);
+        pass("9: Polar och Ved redovisas (5 495 och 4 395 kr)", t9.answer.includes("5 495") && t9.answer.includes("4 395"));
+        pass("9: avfärdar inte Q4-priserna som utgångna", !/(inte|ej) (som )?(ett |några )?(bekräftade?|aktuella?|giltiga?)[^.]{0,30}(Q4-?)?(pris|erbjudand)|använder (jag )?(därför )?inte (de|dessa) (priser|uppgifter)|inte (längre )?gäller/i.test(t9.answer));
+        pass("9: nämner avvikelsen som kontrollpunkt", /lathund|äldre (datum|period)|motsäg|avvik|kontroll/i.test(t9.answer));
       }
 
       // 7: follow-up after an answer with several sources.
@@ -390,6 +443,8 @@ describe.skipIf(!isDevelopmentProject)("conversation-aware retrieval (real OpenA
       ...Object.entries(quality).map(([k, v]) => `${v >= RUNS - 1 ? "✓" : "✗"} ${k}: ${v}/${RUNS}`),
       "",
       `Kontext smal fråga: ${avg(byScope("focused").map((t) => t.stats.chunks))} textbitar, ${avg(byScope("focused").map((t) => t.stats.chars))} tecken, ${avg(byScope("focused").map((t) => t.usage?.inputTokens ?? 0))} tokens in`,
+      `Output bred fråga: ${avg(byScope("broad").map((t) => t.usage?.outputTokens ?? 0))} tokens i snitt (max ${Math.max(...byScope("broad").map((t) => t.usage?.outputTokens ?? 0))}), varav resonemang ${avg(byScope("broad").map((t) => t.usage?.reasoningTokens ?? 0))}; kapade ${byScope("broad").filter((t) => t.answer.includes("avbröts här")).length}/${byScope("broad").length}; ${avg(byScope("broad").map((t) => t.answer.split(/\s+/).length))} ord i snitt`,
+      `Output smal fråga: ${avg(byScope("focused").map((t) => t.usage?.outputTokens ?? 0))} tokens i snitt (max ${Math.max(...byScope("focused").map((t) => t.usage?.outputTokens ?? 0))})`,
       `Kontext bred fråga: ${avg(byScope("broad").map((t) => t.stats.chunks))} textbitar, ${avg(byScope("broad").map((t) => t.stats.chars))} tecken, ${avg(byScope("broad").map((t) => t.usage?.inputTokens ?? 0))} tokens in`,
       `Återhämtade källor i följdfrågor: ${avg(turns.filter((t) => t.stats.followUp).map((t) => t.stats.reused))} i snitt`,
       `Retrieval (embedding + sökning): ${avg(turns.map((t) => t.retrievalMs))} ms i snitt`,

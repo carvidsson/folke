@@ -103,6 +103,7 @@ Begränsning: Supabase Auth, Storage och PostgREST körs inte i PGlite. Därför
 - `search_document_context` och `get_document_context_chunks` är SECURITY INVOKER, får inte köras av `anon` och följer samma RLS som tidigare. Det betyder grupper, assistent, granskning, giltighet och dataklass.
 - Textbitar från ett tidigare svar läses om under samma regler. Om ett dokument har återkallats, gått ut eller inte längre delas med användaren följer det därför inte med.
 - Tidigare svar skickas aldrig som källor, och deras källmarkörer tas bort ur historiken.
+- Loggraden `[chat/retrieval]` innehåller bara konversationens id, leverantör, antal och textbitarnas id:n, aldrig dokument- eller konversationsinnehåll (ADR-043).
 - Täcks av `tests/db/ai-guard.test.ts` (4 tester) och `tests/ai-eval/retrieval.eval.ts`. Utvärderingen kontrollerar bland annat att utgångna dokument aldrig hamnar i kontexten.
 
 ## Extern AI (OpenAI)

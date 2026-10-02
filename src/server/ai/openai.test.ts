@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AIProviderError } from "./errors";
-import { mapOpenAIError, openAIProvider, setOpenAIClientForTests } from "./providers/openai";
+import { TRUNCATED_NOTE, mapOpenAIError, openAIProvider, setOpenAIClientForTests } from "./providers/openai";
 import type { UsageReport } from "./types";
 
 /**
@@ -81,7 +81,7 @@ describe("OpenAI provider request", () => {
       model: "gpt-6-luna",
       stream: true,
       store: false,
-      max_output_tokens: 1200,
+      max_output_tokens: 2000,
       instructions: "Systemprompt med syntetiska källor",
       input: [{ role: "user", content: "Hur lång är garantin på laddkabeln?" }],
     });
@@ -151,7 +151,8 @@ describe("OpenAI provider usage", () => {
     );
     const { text, error, reports } = await run();
     expect(error).toBeNull();
-    expect(text).toContain("Svaret kortades");
+    expect(text).toBe(`Ett långt svar${TRUNCATED_NOTE}`);
+    expect(TRUNCATED_NOTE).toContain("Be mig gärna fortsätta, eller fråga om en del i taget.");
     expect(reports).toHaveLength(1);
   });
 

@@ -97,6 +97,10 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Fasta regler: resonemang och delvisa svar, aldrig nya faktauppgifter | ✅ |
 | Säljassistentens nya instruktion (jämförelser, luckor, giltighet) | ✅ Publicerad i betan (folke) · utkast i folke-dev |
 | Migration `20261007090000_retrieval_context.sql` | ✅ folke-dev och folke |
+| Efter betatest (ADR-043): källor före tidigare påståenden, källor från två svar | ✅ |
+| Giltighet i flera nivåer, kontrollpunkt vid motsägelse | ✅ |
+| Kompakta breda svar, output-tak 2 000 tokens, tydligare meddelande vid kapning | ✅ |
+| Chatten scrollar inte längre förbi slutet | ✅ Webbläsartest |
 
 ## Senare
 

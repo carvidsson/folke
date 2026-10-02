@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CARRIED_MAX,
+  DOCUMENT_SHARE,
   RETRIEVAL_BUDGETS,
   classifyQuery,
   conversationSignals,
@@ -86,20 +87,39 @@ describe("conversation signals", () => {
     { role: "user", content: "Fråga 3", sources: null },
   ];
 
-  it("finds the previous question and the chunks the previous answer cited", () => {
-    expect(conversationSignals(rows)).toEqual({ previousUserMessage: "Fråga 2", citedChunkIds: [7, 9] });
+  it("finds the previous question and the chunks the two latest answers cited, newest first", () => {
+    expect(conversationSignals(rows)).toEqual({ previousUserMessage: "Fråga 2", citedChunkIds: [7, 9, 5] });
   });
 
   it("is empty for the first question", () => {
     expect(conversationSignals([rows[0]])).toEqual({ previousUserMessage: null, citedChunkIds: [] });
   });
 
-  it("ignores a failed turn without an answer", () => {
+  it("keeps earlier sources after a failed turn without an answer", () => {
     const failed = [...rows.slice(0, 3), { role: "user" as const, content: "Fråga 3", sources: null }];
-    expect(conversationSignals(failed)).toEqual({ previousUserMessage: "Fråga 2", citedChunkIds: [] });
+    expect(conversationSignals(failed)).toEqual({ previousUserMessage: "Fråga 2", citedChunkIds: [5] });
   });
 
-  it("carries at most CARRIED_MAX chunks", () => {
+  it("skips an answer that was cut off before citing anything (the chain does not break)", () => {
+    const cut: HistoryRow[] = [
+      ...rows,
+      { role: "assistant", content: "Långt svar som avbröts", sources: [] },
+      { role: "user", content: "Fråga 4", sources: null },
+    ];
+    expect(conversationSignals(cut)).toEqual({ previousUserMessage: "Fråga 3", citedChunkIds: [7, 9, 5] });
+  });
+
+  it("uses only the two latest answers with sources", () => {
+    const longer: HistoryRow[] = [
+      { role: "user", content: "a", sources: null },
+      { role: "assistant", content: "b", sources: [source("1")] },
+      ...rows,
+    ];
+    expect(conversationSignals(longer).citedChunkIds).toEqual([7, 9, 5]);
+  });
+
+  it(`carries at most ${CARRIED_MAX} chunks`, () => {
+    expect(CARRIED_MAX).toBe(16);
     const sources = Array.from({ length: 30 }, (_, i) => source(String(i + 1)));
     const r = conversationSignals([
       { role: "user", content: "a", sources: null },
@@ -111,6 +131,22 @@ describe("conversation signals", () => {
 });
 
 describe("context selection", () => {
+  it("keeps the budgets and document share of ADR-042 unchanged", () => {
+    expect(RETRIEVAL_BUDGETS).toEqual({
+      focused: { maxChunks: 20, maxChars: 16_000, candidates: 60, relevantWithin: 10 },
+      broad: { maxChunks: 60, maxChars: 40_000, candidates: 150, relevantWithin: 30 },
+    });
+    expect(DOCUMENT_SHARE).toBe(0.6);
+  });
+
+  it("re-read chunks are never pushed out by a full broad context", () => {
+    const carried = many("Q", 16, 800);
+    const ranked = interleave(many("A", 80, 900), many("B", 80, 900));
+    const rows = selectContext(ranked, carried, "broad", { followUp: true });
+    expect(rows.filter((r) => r.reused)).toHaveLength(16);
+    expect(rows.reduce((n, r) => n + r.content.length, 0)).toBeLessThanOrEqual(RETRIEVAL_BUDGETS.broad.maxChars);
+  });
+
   it("uses about 20 chunks for focused questions instead of 6", () => {
     const rows = selectContext(many("A", 40), [], "focused", { followUp: false });
     expect(rows).toHaveLength(RETRIEVAL_BUDGETS.focused.maxChunks);

@@ -27,6 +27,10 @@ import type { AIProvider, ChatCompletionInput, ProviderEvent, UsageReport } from
 
 type ResponsesClient = Pick<OpenAI, "responses" | "embeddings" | "models">;
 
+/** Appended when the output-token limit cut the answer (the partial answer is kept). */
+export const TRUNCATED_NOTE =
+  "\n\n_(Svaret blev för långt och avbröts här. Be mig gärna fortsätta, eller fråga om en del i taget.)_";
+
 let client: ResponsesClient | null = null;
 
 /** Tests may inject a fake client. */
@@ -125,7 +129,7 @@ export const openAIProvider: AIProvider = {
             if (event.response.incomplete_details?.reason !== "max_output_tokens") {
               throw new AIProviderError("incomplete", event.response.incomplete_details?.reason ?? undefined);
             }
-            yield { type: "text", delta: "\n\n_(Svaret kortades eftersom det blev för långt.)_" };
+            yield { type: "text", delta: TRUNCATED_NOTE };
             break;
           case "response.failed":
             usage = toUsage(model.id, event.response.usage);

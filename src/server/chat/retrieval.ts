@@ -14,7 +14,7 @@ import { toContext, type HistoryRow, type SearchRow } from "./turn";
  *
  *   1. Conversation-aware query: a follow-up question is searched together
  *      with the previous user question.
- *   2. The chunks the previous answer cited are re-read from the database
+ *   2. The chunks the latest two answers with sources cited are re-read from the database
  *      (never the answer text itself) and kept when they are still relevant.
  *   3. Scope: broad questions (overviews, comparisons, "all …") get a larger
  *      budget than focused fact questions.
@@ -48,8 +48,10 @@ export const RETRIEVAL_BUDGETS: Record<QueryScope, RetrievalBudget> = {
 
 /** Largest share of the budget one document may take while other relevant documents have chunks left. */
 export const DOCUMENT_SHARE = 0.6;
-/** At most this many chunks are carried over from the previous answer. */
-export const CARRIED_MAX = 12;
+/** At most this many chunks are carried over from earlier answers. */
+export const CARRIED_MAX = 16;
+/** Cited chunks are carried over from this many of the latest answers that cited sources. */
+export const CARRIED_ANSWERS = 2;
 
 const WORD = "[\\p{L}\\p{N}]";
 const term = (pattern: string) => new RegExp(`(?<!${WORD})(?:${pattern})(?!${WORD})`, "iu");
@@ -109,28 +111,30 @@ export function retrievalQuery(message: string, previousUserMessage: string | nu
 export interface ConversationSignals {
   /** The user question before the current one, if any. */
   previousUserMessage: string | null;
-  /** Chunk ids the previous answer cited (its stored, verified sources). */
+  /**
+   * Chunk ids cited by the latest answers that cited sources (their stored,
+   * verified sources), newest answer first. An answer that was cut off
+   * before citing anything does not break the chain.
+   */
   citedChunkIds: number[];
 }
 
 /**
  * Reads the conversation (chronological, ending with the current question)
- * for the previous question and the chunks the previous answer cited.
+ * for the previous question and the chunks the latest answers cited.
  */
 export function conversationSignals(rows: Pick<HistoryRow, "role" | "content" | "sources">[]): ConversationSignals {
   let end = rows.length;
   if (end && rows[end - 1].role === "user") end--;
   let previousUserMessage: string | null = null;
-  let lastAnswer: (typeof rows)[number] | null = null;
+  const answers: NonNullable<HistoryRow["sources"]>[] = [];
   for (let i = end - 1; i >= 0; i--) {
-    if (!lastAnswer && rows[i].role === "assistant" && previousUserMessage === null) lastAnswer = rows[i];
-    if (rows[i].role === "user") {
-      previousUserMessage = rows[i].content;
-      break;
-    }
+    const row = rows[i];
+    if (row.role === "user" && previousUserMessage === null) previousUserMessage = row.content;
+    if (row.role === "assistant" && row.sources?.length && answers.length < CARRIED_ANSWERS) answers.push(row.sources);
   }
   const citedChunkIds = [
-    ...new Set((lastAnswer?.sources ?? []).map((s) => Number(s.id)).filter((n) => Number.isSafeInteger(n) && n > 0)),
+    ...new Set(answers.flat().map((s) => Number(s.id)).filter((n) => Number.isSafeInteger(n) && n > 0)),
   ].slice(0, CARRIED_MAX);
   return { previousUserMessage, citedChunkIds };
 }
@@ -141,7 +145,7 @@ interface Picked extends SearchRow {
 
 /**
  * Picks the context from ranked candidates (best first) and re-read chunks
- * from the previous answer. Pure, so it can be unit tested.
+ * from earlier answers. Pure, so it can be unit tested.
  *
  * Order in the prompt: documents in order of relevance, chunks in reading
  * order within each document (so neighbouring pages stay together).
@@ -207,6 +211,9 @@ export interface RetrievalStats {
   chars: number;
   documents: number;
   reused: number;
+  /** Chunk ids requested from earlier answers and the ones actually used (ids only, no content). */
+  reuseRequested: number[];
+  reusedChunkIds: number[];
 }
 
 export interface RetrievalResult {
@@ -253,7 +260,7 @@ export async function retrieveContext(
   if (search.error) console.error("[chat/retrieval] search failed", search.error.message);
   if (carried.error) console.error("[chat/retrieval] earlier sources could not be read", carried.error.message);
 
-  // Keep the previous answer's citation order for the re-read chunks.
+  // Keep the citation order (newest answer first) for the re-read chunks.
   const order = new Map(signals.citedChunkIds.map((id, i) => [id, i]));
   const earlier = ((carried.data ?? []) as SearchRow[]).sort(
     (a, b) => (order.get(a.chunk_id) ?? 0) - (order.get(b.chunk_id) ?? 0),
@@ -273,6 +280,8 @@ export async function retrieveContext(
       chars: rows.reduce((n, r) => n + r.content.length, 0),
       documents: new Set(rows.map((r) => r.document_id)).size,
       reused: rows.filter((r) => r.reused).length,
+      reuseRequested: signals.citedChunkIds,
+      reusedChunkIds: rows.filter((r) => r.reused).map((r) => r.chunk_id),
     },
   };
 }

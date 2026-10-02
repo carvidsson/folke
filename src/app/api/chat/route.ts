@@ -148,7 +148,7 @@ export async function POST(request: Request) {
     .returns<HistoryRow[]>();
   const rows = (historyRows ?? []).reverse();
 
-  const { context, sources } = await retrieveContext(supabase, {
+  const { context, sources, stats } = await retrieveContext(supabase, {
     assistantId: assistant.id,
     message: message.content,
     history: rows,
@@ -162,8 +162,13 @@ export async function POST(request: Request) {
           )
       : null,
   });
+  // Counts and chunk ids only – never document or conversation content.
+  console.info(
+    "[chat/retrieval]",
+    JSON.stringify({ conversation: conversation.id, provider: provider.id, ...stats }),
+  );
 
-  const referenced = [...new Set(rows.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
+  const referenced =[...new Set(rows.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
   // Earlier answers are only sent again while their documents are still
   // readable – and, for external calls, still approved (revocation).
   const { data: readable } = referenced.length
@@ -225,6 +230,7 @@ export async function POST(request: Request) {
               personalReminder: personalReminder(preferences),
             },
             context,
+            { broad: stats.scope === "broad" },
           ),
           messages: history,
           context,

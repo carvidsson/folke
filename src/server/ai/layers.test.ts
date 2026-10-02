@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_AI_PREFERENCES, type AIPreferences } from "@/lib/domain/preferences";
 
 import { personalInstructions, personalReminder } from "./preferences";
-import { FIXED_RULES, buildSystemPrompt } from "./prompt";
+import { BROAD_ANSWER_SHAPE, FIXED_RULES, buildSystemPrompt } from "./prompt";
 
 /** Instruction layers and personal preferences (ADR-037). */
 
@@ -51,7 +51,30 @@ describe("instruction layers", () => {
     expect(missing).toContain("säg tydligt exakt vilken uppgift som saknas och svara på resten");
     expect(reasoning).toContain("Du får resonera, jämföra, dra slutsatser och rekommendera");
     expect(reasoning).toContain("skapa aldrig nya faktauppgifter");
-    expect(validity).toContain("Jämför med dagens datum");
+    expect(validity).toContain("Avgör vad som gäller nu utifrån dagens datum");
+  });
+
+  it("verified sources outweigh earlier answers that said something was missing (ADR-043)", () => {
+    const [sources] = FIXED_RULES;
+    expect(sources).toContain("gäller källorna, även om ett tidigare svar påstod att uppgiften saknades");
+    expect(sources).toContain("Påstå aldrig att en uppgift saknas i underlaget utan att ha kontrollerat källorna nedan.");
+  });
+
+  it("validity follows the most specific clear information and the whole document (ADR-043)", () => {
+    const validity = FIXED_RULES[4];
+    expect(validity).toContain("den mest specifika tydliga giltighetsuppgiften och dokumentets sammanhang");
+    expect(validity).toContain("ett entydigt passerat slutdatum gör det inaktuellt även om dokumentet gäller längre");
+    expect(validity).toContain("är inte utgånget bara för att en enskild del har ett äldre datum");
+    expect(validity).toContain("markera motsägelsen som kontrollpunkt och avgör inte själv vilken uppgift som är rätt");
+  });
+
+  it("asks for a compact answer only for broad questions, after the sources", () => {
+    const layers = { organization: "", assistant: "A." };
+    const broad = buildSystemPrompt(layers, [], { today: "2026-10-02", broad: true });
+    expect(broad.indexOf("## Svarsform")).toBeGreaterThan(broad.indexOf("## Källor"));
+    expect(broad).toContain(BROAD_ANSWER_SHAPE);
+    expect(BROAD_ANSWER_SHAPE).toContain("Markera kort vad som saknas.");
+    expect(buildSystemPrompt(layers, [], { today: "2026-10-02" })).not.toContain("## Svarsform");
   });
 
   it("sends today's date and each source's document metadata", () => {

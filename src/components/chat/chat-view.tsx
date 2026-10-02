@@ -83,7 +83,9 @@ export function ChatView({
   );
 
   return (
-    <div className="flex h-full flex-col">
+    // overflow-hidden: nothing in the chat may add height to the page's own
+    // scroll area (<main> in AppShell); only the message list scrolls.
+    <div className="flex h-full flex-col overflow-hidden">
       <ChatHeader
         title={conversation?.title}
         conversationId={conversation?.id}
@@ -295,7 +297,9 @@ function MessageList({
           stick.current = atBottom;
           setShowJump(!atBottom);
         }}
-        className="scrollbar-thin h-full overflow-y-auto px-4 sm:px-6"
+        // relative: absolutely positioned content in messages (e.g. sr-only
+        // labels) stays inside this scroll area instead of stretching the page.
+        className="scrollbar-thin relative h-full overflow-y-auto px-4 sm:px-6"
       >
         <div className="mx-auto flex max-w-3xl flex-col gap-8 pt-6 pb-10">{children}</div>
       </div>

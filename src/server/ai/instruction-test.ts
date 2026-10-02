@@ -61,13 +61,14 @@ async function answer(
   sources: SourceReference[],
   question: string,
   requestId: string,
+  broad: boolean,
 ): Promise<TestAnswer> {
   let text = "";
   let usage: UsageReport | null = null;
   let error: string | undefined;
   try {
     for await (const event of openAIProvider.streamChat({
-      system: buildSystemPrompt(layers, context),
+      system: buildSystemPrompt(layers, context, { broad }),
       messages: [{ role: "user", content: question }],
       context,
       model,
@@ -192,8 +193,8 @@ export async function runSideBySideTest(input: {
   }
 
   const [a, b] = await Promise.all([
-    answer(input.userId, input.assistantId, model, input.a, context, sources, input.question, first.requestId),
-    answer(input.userId, input.assistantId, model, input.b, context, sources, input.question, second.requestId),
+    answer(input.userId, input.assistantId, model, input.a, context, sources, input.question, first.requestId, stats.scope === "broad"),
+    answer(input.userId, input.assistantId, model, input.b, context, sources, input.question, second.requestId, stats.scope === "broad"),
   ]);
   return { ok: true, result: { model, basis: sources, usedVectorSearch: stats.usedVectorSearch, a, b } };
 }

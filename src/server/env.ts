@@ -56,7 +56,8 @@ const schema = z.object({
   FOLKE_AI_MONTHLY_LIMIT_USD: number(10),
   FOLKE_AI_MAX_CONCURRENT_PER_USER: number(2),
   FOLKE_AI_MAX_REQUESTS_PER_MINUTE: number(10),
-  FOLKE_AI_MAX_OUTPUT_TOKENS: number(1200),
+  /** Includes the model's reasoning tokens (OpenAI counts them in the limit). */
+  FOLKE_AI_MAX_OUTPUT_TOKENS: number(2000),
   FOLKE_AI_TIMEOUT_MS: number(45_000),
   /** Conversion for the SEK column in usage reports (an estimate). */
   FOLKE_USD_TO_SEK: number(10.5),
