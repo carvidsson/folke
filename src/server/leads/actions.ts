@@ -2,51 +2,40 @@
 
 import { z } from "zod";
 
-import type { LeadActionResult, LeadAIResult, LeadReport } from "@/lib/leads/types";
+import { daysBetween, resolvePeriod } from "@/lib/leads/periods";
+import { OPPORTUNITY_TYPES, STRENGTH_TYPES, type EvidenceFilter, type EvidenceRow, type LeadActionResult, type LeadAIResult } from "@/lib/leads/types";
 import { leadAnalysisExternalAllowed } from "@/server/ai/guard";
 import { logSecurityEvent } from "@/server/audit";
-import { getSession } from "@/server/auth/session";
-import { leadStore } from "@/server/data/leads";
+import { getRun, leadStore } from "@/server/data/leads";
 
+import { requireLeadAccess } from "./access";
 import { stockholmTime } from "./business-hours";
 import { HubSpotError, hubSpotConfigured } from "./hubspot";
-import { analyseLeads, collectLeads, MAX_PERIOD_DAYS } from "./service";
+import { evidence, resolveScope, RESPONSE_BUCKETS } from "./overview";
+import { renderStoredRun } from "./runs";
+import { analyseInbox, MAX_SYNC_DAYS, summariseScope } from "./service";
+import { syncInbox } from "./sync";
 
 /**
- * Lead analysis (ADR-046). System administrators only. Reads HubSpot
- * (read-only) on the server; the browser receives the report without
- * customer contact details or message texts.
+ * Lead analysis actions for users with access (ADR-048). Every action
+ * re-resolves the scope through RLS: an inbox or region the user may not see
+ * is simply not found. Reads HubSpot read-only; writes only to Folke.
  */
 
-
-
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const input = z
-  .object({ inboxId: z.string().regex(/^\d{1,20}$/), from: isoDate, to: isoDate })
-  // A real calendar date: "2026-02-31" is rejected, not rolled over to March.
-  .refine((v) => [v.from, v.to].every((d) => new Date(`${d}T12:00:00Z`).toISOString().slice(0, 10) === d), "date")
-  .refine((v) => v.from <= v.to, "order")
-  .refine((v) => (Date.parse(v.to) - Date.parse(v.from)) / 86_400_000 < MAX_PERIOD_DAYS, "length")
-  .refine((v) => {
-    const t = stockholmTime(new Date());
-    const today = `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`;
-    return v.to <= today;
-  }, "future");
-
-const INPUT_ERRORS: Record<string, string> = {
-  order: "Startdatum måste ligga före slutdatum.",
-  length: `Välj en period på högst ${MAX_PERIOD_DAYS} dagar.`,
-  future: "Perioden kan inte sluta i framtiden.",
-};
-
-async function requireSystemAdmin() {
-  const session = await getSession();
-  if (session.user.role !== "system_admin") {
-    await logSecurityEvent("access.denied", { actorId: session.user.id, metadata: { area: "admin.leads" } });
-    throw new Error("Behörighet saknas");
-  }
-  return session;
+function today() {
+  const t = stockholmTime(new Date());
+  return `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`;
 }
+
+const id = z.string().regex(/^[0-9]{1,20}$/);
+const regionId = z.union([z.uuid(), z.literal("none")]);
+const scopeInput = z.object({
+  regionId: regionId.nullish(),
+  inboxId: id.nullish(),
+  preset: z.enum(["7d", "30d", "this_month", "last_month", "custom"]).optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
 
 function hubSpotMessage(error: unknown): string {
   const code = error instanceof HubSpotError ? error.code : "unknown";
@@ -57,8 +46,6 @@ function hubSpotMessage(error: unknown): string {
     case "auth":
     case "forbidden":
       return "HubSpot nekade åtkomst. Kontrollera servicenyckeln och att den har behörigheten conversations.read.";
-    case "not_found":
-      return "Inkorgen hittades inte i HubSpot.";
     case "rate_limited":
       return "HubSpot begränsar antalet anrop just nu. Försök igen om en minut.";
     default:
@@ -66,68 +53,156 @@ function hubSpotMessage(error: unknown): string {
   }
 }
 
-function parseInput(raw: unknown) {
-  const parsed = input.safeParse(raw);
-  if (parsed.success) return { ok: true as const, value: parsed.data };
-  const code = parsed.error.issues[0]?.message ?? "";
-  return { ok: false as const, error: INPUT_ERRORS[code] ?? "Välj en inkorg och en giltig period." };
+async function scopeAndPeriod(raw: unknown) {
+  const parsed = scopeInput.safeParse(raw);
+  if (!parsed.success) return null;
+  const v = parsed.data;
+  const data = await resolveScope({ regionId: v.regionId ?? null, inboxId: v.inboxId ?? null });
+  if (!data) return null;
+  return { data, period: resolvePeriod(v.preset, today(), v.from, v.to) };
 }
 
-export async function leadReportAction(raw: unknown): Promise<LeadActionResult<LeadReport>> {
-  const session = await requireSystemAdmin();
+/**
+ * Fetches the scope's inboxes from HubSpot for the period, one inbox after
+ * another until ~180 s have passed. Returns which inboxes remain; the page
+ * calls again until none remain.
+ */
+export async function syncLeadsAction(
+  raw: unknown,
+  only?: string[],
+): Promise<LeadActionResult<{ done: string[]; remaining: string[]; incomplete: string[] }>> {
+  const { session } = await requireLeadAccess();
   if (!hubSpotConfigured()) return { ok: false, error: hubSpotMessage(new HubSpotError("not_configured")) };
-  const parsed = parseInput(raw);
-  if (!parsed.ok) return parsed;
-  try {
-    const { report } = await collectLeads(parsed.value);
-    await logSecurityEvent("leads.report_generated", {
-      actorId: session.user.id,
-      targetType: "hubspot_inbox",
-      targetId: parsed.value.inboxId,
-      metadata: { from: parsed.value.from, to: parsed.value.to, leads: report.dataset.leads, complete: report.dataset.complete },
-    });
-    return { ok: true, data: report };
-  } catch (error) {
-    return { ok: false, error: hubSpotMessage(error) };
+  const resolved = await scopeAndPeriod(raw);
+  if (!resolved) return { ok: false, error: "Urvalet hittades inte." };
+  const { data, period } = resolved;
+  if (daysBetween(period.from, period.to) > MAX_SYNC_DAYS) {
+    return { ok: false, error: `Välj en period på högst ${MAX_SYNC_DAYS} dagar för att hämta från HubSpot.` };
   }
-}
-
-export async function leadAIAnalysisAction(raw: unknown): Promise<LeadActionResult<{ report: LeadReport; ai: LeadAIResult }>> {
-  const session = await requireSystemAdmin();
-  if (!leadAnalysisExternalAllowed()) {
-    return { ok: false, error: "AI-analysen är inte aktiverad i den här miljön." };
-  }
-  if (!hubSpotConfigured()) return { ok: false, error: hubSpotMessage(new HubSpotError("not_configured")) };
-  const parsed = parseInput(raw);
-  if (!parsed.ok) return parsed;
-
+  const allowed = new Set(data.scopeInboxes.map((i) => i.id));
+  const queue = (only ?? [...allowed]).filter((i) => typeof i === "string" && allowed.has(i));
+  const deadline = Date.now() + 200_000;
   const store = leadStore();
-  let collected;
+  const done: string[] = [];
+  const incomplete: string[] = [];
   try {
-    collected = await collectLeads(parsed.value, store);
+    for (const inboxId of queue) {
+      if (Date.now() > deadline - 30_000) break;
+      const inbox = data.scopeInboxes.find((i) => i.id === inboxId)!;
+      const result = await syncInbox(inbox, period, store, { deadline });
+      done.push(inboxId);
+      if (!result.complete) incomplete.push(inboxId);
+    }
+  } catch (error) {
+    if (!done.length) return { ok: false, error: hubSpotMessage(error) };
+  }
+  await logSecurityEvent("leads.synced", {
+    actorId: session.user.id,
+    targetType: "lead_scope",
+    targetId: data.scope.inboxId ?? data.scope.regionId ?? "all",
+    metadata: { from: period.from, to: period.to, inboxes: done.length, incomplete: incomplete.length },
+  });
+  return { ok: true, data: { done, remaining: queue.filter((i) => !done.includes(i)), incomplete } };
+}
+
+/** Updates one inbox from HubSpot and analyses what changed (stored analyses are reused). */
+export async function analyseInboxAction(raw: unknown): Promise<LeadActionResult<LeadAIResult>> {
+  const { session } = await requireLeadAccess();
+  if (!leadAnalysisExternalAllowed()) return { ok: false, error: "AI-analysen är inte aktiverad i den här miljön." };
+  const resolved = await scopeAndPeriod(raw);
+  if (!resolved || resolved.data.scope.type !== "inbox") return { ok: false, error: "Inkorgen hittades inte." };
+  const { data, period } = resolved;
+  if (daysBetween(period.from, period.to) > MAX_SYNC_DAYS) return { ok: false, error: `Välj en period på högst ${MAX_SYNC_DAYS} dagar.` };
+  const inbox = data.scopeInboxes[0];
+  const store = leadStore();
+  try {
+    // Fresh facts first: the analysis decides from them what has changed.
+    await syncInbox(inbox, period, store, { deadline: Date.now() + 60_000 });
   } catch (error) {
     return { ok: false, error: hubSpotMessage(error) };
   }
-  const run = await analyseLeads(collected, session.user.id, { store });
+  const run = await analyseInbox({ inbox, period }, session.user.id, { store });
   if (!run.ok) return run;
-  // The history now includes this run.
-  if (collected.report.history) {
-    collected.report.history = await store.history(collected.report.inbox.id).catch(() => collected.report.history);
-  }
   await logSecurityEvent("leads.ai_analysis_run", {
     actorId: session.user.id,
     targetType: "hubspot_inbox",
-    targetId: parsed.value.inboxId,
+    targetId: inbox.id,
     metadata: {
-      from: parsed.value.from,
-      to: parsed.value.to,
-      dialogues: run.result.dialoguesAnalysed,
-      analysedNew: run.result.analysedNew,
-      reused: run.result.reused,
-      analysisVersion: run.result.analysisVersion,
-      model: run.result.model,
-      costUsd: run.result.costUsd,
+      from: period.from,
+      to: period.to,
+      dialogues: run.result.run.dialoguesAnalysed,
+      analysedNew: run.result.run.analysedNew,
+      reused: run.result.run.reused,
+      model: run.result.run.model,
+      costUsd: run.result.run.costUsd,
     },
   });
-  return { ok: true, data: { report: collected.report, ai: run.result } };
+  return { ok: true, data: run.result };
+}
+
+/** AI's combined reading of a region or all regions, from stored classifications only. */
+export async function summariseScopeAction(raw: unknown): Promise<LeadActionResult<LeadAIResult>> {
+  const { session, access } = await requireLeadAccess();
+  if (!leadAnalysisExternalAllowed()) return { ok: false, error: "AI-analysen är inte aktiverad i den här miljön." };
+  const resolved = await scopeAndPeriod(raw);
+  if (!resolved || resolved.data.scope.type === "inbox") return { ok: false, error: "Urvalet hittades inte." };
+  const { data, period } = resolved;
+  if (data.scope.type === "all" && !access.allRegions) return { ok: false, error: "Sammanvägningen för alla regioner kräver åtkomst till alla regioner." };
+  if (data.scope.regionId === "none") return { ok: false, error: "Välj en region." };
+  const run = await summariseScope({ scopeType: data.scope.type === "all" ? "all" : "region", regionId: data.scope.regionId, inboxIds: data.scopeInboxes.map((i) => i.id), period }, session.user.id);
+  if (!run.ok) return run;
+  await logSecurityEvent("leads.ai_analysis_run", {
+    actorId: session.user.id,
+    targetType: "lead_scope",
+    targetId: data.scope.regionId ?? "all",
+    metadata: { from: period.from, to: period.to, dialogues: run.result.run.dialoguesAnalysed, model: run.result.run.model, costUsd: run.result.run.costUsd },
+  });
+  return { ok: true, data: run.result };
+}
+
+/** Opens a stored analysis – no HubSpot or OpenAI call. RLS decides whether the user may see it. */
+export async function openRunAction(runId: string): Promise<LeadActionResult<LeadAIResult>> {
+  await requireLeadAccess();
+  if (!z.uuid().safeParse(runId).success) return { ok: false, error: "Analysen hittades inte." };
+  const run = await getRun(runId);
+  if (!run) return { ok: false, error: "Analysen hittades inte." };
+  return { ok: true, data: await renderStoredRun(run) };
+}
+
+const evidenceFilters = [
+  "no_reply_open",
+  "customer_last_stale",
+  "clear_intent_customer_last",
+  "waiting_customer",
+  "follow_up_missing",
+  "unanswered_questions",
+  "missed_opportunity",
+  "next_step_missing",
+  "undetermined",
+  "stated_other_channel",
+  "virtual",
+] as const;
+const oneOf = (prefix: string, values: readonly string[]) => z.string().regex(new RegExp("^" + prefix + ":(" + values.join("|") + ")$"));
+const evidenceFilter = z.union([
+  z.enum(evidenceFilters),
+  oneOf("opportunity", OPPORTUNITY_TYPES),
+  oneOf("strength", STRENGTH_TYPES),
+  oneOf("bucket", RESPONSE_BUCKETS.map((b) => b.id)),
+  // A source name as stored (any text, bounded); it is only compared, never used in a query.
+  z.string().regex(/^source:.{1,80}$/),
+]);
+
+/** The leads behind an insight or a finding: structured reasons and HubSpot links, no dialogue text. */
+export async function evidenceAction(raw: unknown, selection: { filter?: string; threadIds?: string[] }): Promise<LeadActionResult<EvidenceRow[]>> {
+  await requireLeadAccess();
+  const resolved = await scopeAndPeriod(raw);
+  if (!resolved) return { ok: false, error: "Urvalet hittades inte." };
+  const filter = evidenceFilter.optional().safeParse(selection?.filter);
+  const threadIds = z.array(id).max(300).optional().safeParse(selection?.threadIds);
+  if (!filter.success || !threadIds.success || (!filter.data && !threadIds.data)) return { ok: false, error: "Ogiltigt urval." };
+  try {
+    return { ok: true, data: await evidence(resolved.data, resolved.period, { filter: filter.data as EvidenceFilter | undefined, threadIds: threadIds.data }) };
+  } catch {
+    return { ok: false, error: "Underlaget kunde inte hämtas." };
+  }
 }

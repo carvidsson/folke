@@ -428,9 +428,145 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 | Omkörning utan ändringar, 84 återanvända | 0,0006 USD | 1 (bara sammanvägningen) | 12 s |
 | 5 ändrade dialoger | 0,0033 USD | 2 | 45 s |
 
+### ADR-048 – Leadanalys som översikt: regioner, åtkomst, hämtning till Folke och analysmetod lead-ai-3
+
+**Sammanhang:** Betan (ADR-047) visade en inkorg i taget, hämtade från HubSpot vid varje visning och var bara öppen för systemadministratörer. Försäljningsledningen behöver en översikt över alla leadinkorgar, uppdelad i regioner, med jämförelse mot föregående period, och regionchefer ska kunna se sin egen region. AI-analysen behövde också förstå kundens situation bättre innan den bedömer säljarens agerande.
+
+**Beslut:**
+- **Hierarki:** alla aktiva inkorgar → region → inkorg → leads (`/leads` i arbetsytan, med `region` och `inbox` i adressen). Regioner är data (`lead_regions`), inte kod. HubSpots inkorg-id är den stabila nyckeln. Administratören väljer aktiv, region, anläggning och varumärke per inkorg (`/admin/leads`). Tabeller över regioner och inkorgar har ingen rangordning och inga röd/gröna omdömen.
+- **Sidan läser bara data som Folke har sparat.** "Uppdatera från HubSpot" hämtar inkrementellt: en tråd vars senaste meddelande inte har ändrats läses inte om. Hämtningen görs i omgångar på högst cirka 200 s från webbläsaren. `lead_syncs` sparar vilken period som hämtats och om hämtningen var komplett. Täckningen räknas per dag och inkorg, och en period som inte är helt hämtad markeras alltid som delvis, aldrig som komplett. Sidan visar när datan senast hämtades.
+- **Perioder:** 7 och 30 dagar, denna månad, förra månaden och eget intervall (högst 92 dagar per hämtning). Jämförelsen är deterministisk:
+  - Denna månad jämförs med samma dagar i föregående månad.
+  - Förra månaden jämförs med hela månaden före.
+  - Övriga perioder jämförs med lika lång period direkt före.
+- **Bilar:** märke och modell tas ur formulärets fält, ämnesraden eller kampanjsidans adress, mot en katalog i koden (`vehicle.ts`). Folke gissar aldrig: det som inte kan fastställas visas som "Ej identifierad", och andelen identifierade visas. Varje lead räknas en gång.
+- **Insikter:** högst fem deterministiska observationer, framräknade ur HubSpot-fakta eller ur räknade AI-klassificeringar. Varje observation är märkt med sitt ursprung och går att klicka till underlaget.
+- **Underlag:** en lista med leads som visar datum, källa, bil, säljare och AI:s avidentifierade motivering, plus "Öppna original i HubSpot". Ingen dialogtext visas eller sparas.
+- **Länk till HubSpot:** HubSpot dokumenterar ingen adress till en enskild konversation, så Folke gissar ingen. En systemadministratör klistrar in adressen till en riktig konversation. Folke kontrollerar då:
+  - att värden är HubSpots,
+  - att adressen innehåller kontots portal-id (`/account-info/v3/details`),
+  - att exakt ett tal i adressen är en befintlig tråd.
+
+  Mallen sparas i `lead_settings`. Utan verifierad mall visas inga länkar.
+- **Åtkomst:** `lead_access_grants` ger en Folke-grupp eller en användare tillgång till alla regioner eller en region. Systemadministratörer har alltid full åtkomst. Behörigheten kontrolleras på tre nivåer:
+  - i varje sida (`requireLeadAccessPage`, 404 och logg),
+  - i varje server action (`requireLeadAccess`),
+  - med RLS (`app.can_read_lead_inbox` med flera).
+
+  Urvalet i en action räknas fram ur listor som RLS redan har filtrerat. Sammanvägningen för alla regioner kräver åtkomst till alla regioner. Konfigurationen kan bara ändras av systemadministratörer.
+- **Sparade analyser:** den senaste analysen för samma period, metod och modell visas direkt från databasen, utan anrop till OpenAI. "Uppdatera analys" skickar bara ändrade dialoger. En sparad klassificering återanvänds utan att HubSpot läses, när trådens senaste meddelande och uppföljningsläget är oförändrade. Har bara trådens metadata ändrats, och innehållets fingeravtryck är detsamma, återanvänds resultatet också. Tidigare körningar går att öppna, och de som gjorts med en annan metod märks.
+- **Analysmetod `lead-ai-3`:**
+  - Modellen förstår först kundens situation och bedömer därefter om säljaren förde affären framåt. Situationen består av mål, konkreta frågor (besvarad ja/delvis/nej/ej aktuell), köpsignaler, tidsram, budget, invändningar och vad säljaren behövde veta.
+  - Framdriften bedöms som framåt, delvis, stannade, avslutad av kunden eller oklar. Missad möjlighet bedöms som ja, nej eller oklar.
+  - Instruktionen innehåller regler för sammanhang. Exempel: att be om de uppgifter offerten kräver är rätt första svar på en leasingfråga, och behovsfrågor ska inte ställas när kunden redan har valt bil, tid eller pris eller vill komma och titta.
+  - Ny deterministisk regel efter valideringen: när kunden skrev sist blir "stannade" och "missad möjlighet: ja" i stället "oklar". Fortsättningen kan ha gått per e-post eller telefon.
+  - Den sammanvägda analysen ska hitta mönster som inte syns i siffrorna, inte återberätta dem. Varje mönster anger sina dialoger, och mönster med färre än två dialoger sparas inte.
+  - Säljarmönster redovisas med exempel och underlagets styrka. Med färre än fem dialoger skrivs att underlaget är för litet. Ingen ranking, inga poäng och inga omdömen om personen.
+- **Datamodell** (migrationen `20261011090000_lead_overview_access.sql`):
+  - Nya tabeller: `lead_regions`, `lead_syncs`, `lead_settings` och `lead_access_grants`.
+  - Nya kolumner på `lead_inboxes`: aktiv, region, anläggning och varumärke.
+  - Nya kolumner på `lead_threads`: tidpunkter för senaste meddelandena, uppföljning, märke, modell och var bilen identifierades.
+  - Nya kolumner på `lead_dialogue_analyses`: underlaget för återanvändning och situationen som jsonb.
+  - `lead_analysis_runs` får omfång per inkorg, region eller alla.
+  - Inga parallella ögonblicksbilder och inga meddelandetexter. `FACTS_VERSION` är 2.
+
+**Validering i folke-dev (2026-10-03, riktiga data, read-only mot HubSpot):**
+
+Hämtning och siffror:
+- 22 leadinkorgar och 1 276 leads på 60 dagar.
+- Första hämtningen tog 186 s och 1 354 HubSpot-anrop. En inkrementell hämtning tog 7–9 s och 24–28 anrop.
+- Översikt, regioner, inkorgar och märke × modell stämmer exakt mot databasen, och varje lead räknas en gång.
+
+AI:
+- Första analysen av 81 dialoger tog 146 s och kostade 0,041 USD. Omladdning och tidigare analyser gav 0 anrop.
+- Delvis omanalys skickade bara de 3 ändrade dialogerna (0,004 USD). En regionsammanvägning kostar ett anrop (0,003 USD).
+
+Manuell granskning av `lead-ai-3`:
+- 111 avidentifierade dialoger från fem inkorgar granskades.
+- Situationen förstås klart bättre än i `lead-ai-2`: bud, konkurrerande offerter, tidsramar och erbjudanden om besök fångas.
+- 8 av 25 "missad möjlighet" gällde dialoger där kunden skrev sist. Regeln ovan rättar det.
+- Behovsfrågor är fortsatt osäkrast.
+- Sammanvägningen ger konkreta mönster med underlag, till exempel bud plus besöksintresse där bara priset bemöts, i stället för att upprepa siffrorna.
+
+Fel som rättades under valideringen:
+- En nyss körd analys visades som "Tidigare analys".
+- Regionsammanvägningen kallade dialoger utan sparad analys för "över gränsen".
+- Dialoger som modellen utelämnade i en batch räknades som misslyckade utan nytt försök.
+
+**Alternativ som valdes bort:**
+- Att hämta från HubSpot vid varje sidvisning. 22 inkorgar ger cirka 1 300 anrop och 3 minuter för 60 dagar.
+- Att gissa HubSpots konversationsadress.
+- Att låta modellen identifiera bilmodell, eftersom den kan hitta på.
+- Att rangordna regioner eller säljare.
+
+### ADR-049 – Leadanalys: vad som syns i HubSpot, bilagor, Virtuell och visualiseringar
+
+**Sammanhang:**
+- Granskningen av ADR-048 visade att analysen tolkade tystnad i HubSpot som ett misslyckande, till exempel "offert saknas" eller "tappar fart".
+- Offerter skickas ofta i HubSpot, i text eller som bilaga, men kan också komma från säljsystemet (DMS). Samtal syns inte.
+- Sektionen "Att titta närmare på" var en lista med kontroller snarare än insikter.
+- "Kunden skrev sist" var för trubbigt som nyckeltal.
+- Statusraderna summerade inte till totalen.
+- Översikten var tabelltung och saknade leadskällor, svarstidsfördelning och registreringsnumret "Virtuell".
+
+**Beslut:**
+- **Analysmetod `lead-ai-3.1`:** fältet `continuation` skiljer på tre lägen.
+  - `visible`: nästa steg eller utfallet syns i HubSpot, inklusive en offert i text eller som bilaga.
+  - `not_determinable`: dialogen slutar där en fortsättning väntades och inget mer syns. Det kan vara en offert från säljsystemet, ett samtal eller en process som stannade.
+  - `stated_other_channel`: dialogen säger själv att nästa steg sker per telefon, vid ett möte eller i annat system.
+
+  Folke utgår aldrig från att något sker i eller utanför HubSpot. Deterministiska regler i `applyRules`:
+  - När kunden skrev sist eller fortsättningen inte går att avgöra blir "stannade", "nästa steg saknas", "uppföljning saknas" och "missad möjlighet" i stället "går inte att avgöra".
+  - Ett överenskommet nästa steg (`agreed_next_step`) eller säljarens uttalade "jag ringer dig" räknas som ett konkret nästa steg.
+  - En missad möjlighet kräver en synlig möjlighet (`opportunities`) där säljaren skrev efter signalen.
+  - Förbjudna formuleringar när Folke inte kan veta: "offert saknas", "följde inte upp", "tappade fart", "ingen fortsättning" och "fortsatte utanför HubSpot".
+- **Bilagor:** Conversations API redovisar `attachments: [{ type, name, fileUsageType, … }]` (verifierat 2026-10-03). Folke läser bara vilken sorts fil det är. Filnamn och url sparas aldrig och skickas aldrig till OpenAI. Underlaget har tre styrkor:
+  1. En bilaga finns.
+  2. En offertliknande bilaga enligt filnamnet (innehållet är inte läst).
+  3. Meddelandet säger självt att en offert eller kalkyl bifogas eller skickas.
+
+  Analysen får inte dra en starkare slutsats än underlaget medger.
+- **Observationer** ersätter "Att titta närmare på":
+  - 0–5 punkter, typade som Styrka, Möjlighet eller Observation.
+  - Varje punkt visar sitt ursprung, sitt underlag ("12 av 81 AI-analyserade dialoger") och "Visa underlag".
+  - En punkt visas bara när den klarar sin tröskel: minst 10 analyserade dialoger och 2–3 träffar.
+- **"Kunden skrev sist"** är inte längre ett nyckeltal eller en tabellkolumn. Det används som signal tillsammans med sammanhang:
+  - i leadlistan: överenskommet nästa steg, uttalad annan kanal, går inte att avgöra, kan vänta på svar;
+  - som observationen "Kunder som kan vänta på svar": fråga eller tydlig köpintention, mer än två arbetsdagar, inget överenskommet nästa steg.
+- **Tre svarsstatusar som summerar till totalen:** den tredje, "Annat utgående meddelande före säljsvar" (`uncertain`), visas nu. Det gäller 5 av 1 277 leads: ett automatiskt eller systemskickat meddelande kom före säljarens första egna svar.
+- **Visualiseringar,** lugna och med siffrorna bredvid formen:
+  - leadskällor (donut och lista; källorna kommer från datan)
+  - leads per region, inkorg och märke (staplar som länkar vidare)
+  - svarstid per intervall i kontorstid, där föregående period markeras med ett streck
+  - median per inkorg (minst 5 svar, sorterat efter namn, ingen rangordning)
+  - Virtuell per region eller inkorg och per märke
+- **Svarstidsintervall** (kontorstid, population: leads med registrerat säljsvar): Besvarat före kontorstid, 0–15 min, 16–30 min, 31–60 min, 1–2 h, 2–4 h, 4 h – 1 arbetsdag, mer än 1 arbetsdag. "Besvarat före kontorstid" ger 0 kontorsminuter, vilket stämmer matematiskt, men redovisas för sig så att det inte ser ut som ett omedelbart svar (17 % av svaren i testperioden). Varje svar hamnar i exakt ett intervall.
+- **Virtuell:** `lead_threads.regnr_kind` (`plate` | `virtual` | `other` | null) räknas ur formulärets registreringsnummer, skiftlägesokänsligt. Bara sorten sparas, aldrig numret (migrationen `20261012090000_lead_regnr_kind.sql`, `FACTS_VERSION` 3). Det är en signal, inte en fordonsstatus, och Folke tolkar inga skillnader.
+- **Per säljare** på inkorgsnivå: de beräknade siffrorna och AI:s styrkor och möjligheter med exempel står tillsammans. Ingen rangordning och inga poäng, och vid litet underlag sägs det.
+- **Länken till HubSpot** är verifierad med en riktig konversation: portal 19862687, mallen `https://app.hubspot.com/live-messages/19862687/inbox/{threadId}`. Fragmentet `#email` tas bort.
+
+**Produktpolering före release:**
+- Observationerna står överst bara när minst hälften av dialogerna i urvalet är AI-analyserade. Annars placeras de efter de deterministiska delarna, så att HubSpot-fakta dominerar (på Alla leads i dag: 91 av 488).
+- En median per inkorg med färre än 10 registrerade säljsvar tonas ned och märks Litet underlag, men döljs inte.
+- Per säljare visas som underlag för coachning: siffror, Återkommande styrkor och Att utveckla, med exempel som går att öppna.
+- Begränsningarna under AI:s bedömning är förkortade till en mening. Detaljerna finns under Om underlaget.
+- Små absoluta förändringar visas som "4 → 1" i stället för i procent.
+- En diskret, klistrad navigering finns inom sidan. Den markerar den del man är i och håller den synlig på mobil.
+- Laddtiden med sparad data mättes som median av 5 sidladdningar. Före och efter optimeringen av RLS (migrationen `20261013090000_lead_rls_performance.sql`) och parallell läsning av analyser:
+  - Alla leads: 2,6 s före, 0,7–0,8 s efter
+  - Region: 1,0 s före, 0,5–0,8 s efter
+  - Inkorg: 0,6 s före, 0,5 s efter
+
+**Alternativ som valdes bort:**
+- Att anta att offerter skickas utanför HubSpot. Det gick för långt åt andra hållet.
+- Att läsa PDF-innehåll.
+- Fasta kontroller som alltid visas.
+- Att tolka "Virtuell" som inkommande bil.
+
 ---
 
 ## Öppna beslut
+
 
 | Fråga | Alternativ | Att väga in |
 |---|---|---|

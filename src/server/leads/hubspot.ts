@@ -242,6 +242,11 @@ const message = z.object({
   assignedTo: z.string().nullish(),
   toInboxId: optionalId,
   fromInboxId: optionalId,
+  // Only what tells the kind of file. The name is read to classify it and is never stored or sent on;
+  // fileId and url are not read at all.
+  attachments: z
+    .array(z.object({ type: z.string().nullish(), name: z.string().nullish(), fileUsageType: z.string().nullish() }))
+    .nullish(),
 });
 export type HubSpotMessage = z.infer<typeof message>;
 
@@ -262,4 +267,38 @@ export async function listMessages(threadId: string): Promise<HubSpotMessage[]> 
   }
   // A thread with more than 2 000 events is not a lead conversation we can judge.
   throw new HubSpotError("bad_response");
+}
+
+/** One thread (to verify an id an administrator pasted). Null when HubSpot does not know it. */
+export async function getThread(threadId: string): Promise<HubSpotThread | null> {
+  if (!/^\d{1,20}$/.test(threadId)) return null;
+  try {
+    return await get(`/threads/${threadId}`, {}, thread);
+  } catch (error) {
+    if (error instanceof HubSpotError && error.code === "not_found") return null;
+    throw error;
+  }
+}
+
+const account = z.object({ portalId: z.number(), uiDomain: z.string().nullish() });
+
+/**
+ * The HubSpot account's id and UI domain (documented: GET
+ * /account-info/v3/details, read-only). Used only to verify a conversation
+ * URL pasted by an administrator.
+ */
+export async function getAccountDetails(): Promise<{ portalId: string; uiDomain: string | null }> {
+  const key = serverEnv().HUBSPOT_SERVICE_KEY;
+  if (!key) throw new HubSpotError("not_configured");
+  await waitForSlot();
+  const res = await (fetchImpl ?? fetch)("https://api.hubapi.com/account-info/v3/details", {
+    method: "GET",
+    headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new HubSpotError(res.status === 401 ? "auth" : res.status === 403 ? "forbidden" : "unknown", res.status);
+  const parsed = account.safeParse(await res.json().catch(() => null));
+  if (!parsed.success) throw new HubSpotError("bad_response");
+  return { portalId: String(parsed.data.portalId), uiDomain: parsed.data.uiDomain ?? null };
 }

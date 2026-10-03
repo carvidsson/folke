@@ -114,7 +114,7 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Betan | ✅ Aktiverad 2026-10-02 med informationstext. Avtalsfrågorna ska lösas innan fler användare bjuds in. |
 | Schemalagd städning (Vercel Cron) | Senare. Kön är förberedd. |
 
-## Leadanalys från HubSpot (ADR-046, ADR-047) – experiment
+## Leadanalys från HubSpot (ADR-046, ADR-047, ADR-048) – experiment
 
 | Del | Status |
 |---|---|
@@ -124,8 +124,18 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Relevansmodell (gjort / saknades / inte relevant / går inte att avgöra), validerad mot riktiga dialoger | ✅ ADR-047 |
 | Beständig analysdata, versionering och source fingerprint, historik per månad och körning | ✅ ADR-047 |
 | Migrationer `20261009090000`, `20261010090000`, `20261010100000` | ✅ folke-dev och folke (2026-10-03) |
+| Översikt alla → region → inkorg → leads, perioder med jämförelse, täckning och senast hämtat, bilar, inflöde, utveckling över tid | ✅ ADR-048, folke-dev |
+| Regioner, inkorgsval och åtkomst per grupp eller användare och region (sida, action och RLS) | ✅ ADR-048, folke-dev |
+| Insikter med underlag, sparade AI-analyser som öppnas utan OpenAI, delvis omanalys, analysmetod `lead-ai-3` | ✅ ADR-048, folke-dev |
+| Länk till HubSpot via verifierad mall | ✅ Verifierad i folke-dev med en riktig konversation (2026-10-03). Görs om i folke efter migrationen. |
+| Migration `20261011090000` | folke-dev. Inte folke – väntar på godkännande. |
+| `lead-ai-3.1`: synligt / går inte att avgöra / uttalad annan kanal, bilagor som metadata, observationer i stället för kontroller | ✅ ADR-049, folke-dev |
+| Leadskällor, volym per region, inkorg och märke, svarstidsfördelning, median per inkorg, Virtuell | ✅ ADR-049, folke-dev |
+| Migration `20261012090000` | folke-dev. Inte folke – väntar på godkännande. |
+| Produktpolering: observationernas placering efter AI-täckning, Litet underlag, coachningskort per säljare, klistrad navigering, RLS-prestanda | ✅ ADR-049, folke-dev |
+| Migration `20261013090000` | folke-dev. Inte folke – väntar på godkännande. |
+| Per säljare över tid i gränssnittet | Senare. Datat finns och går att aggregera. |
 | Svenska helgdagar i kontorstiden | Senare |
-| Jämförelse av perioder och per säljare över tid i gränssnittet | Senare. Datat finns och går att aggregera. |
 | Gallring av analysdata | Senare. Beslut om lagringstid behövs. |
 | Betan | ✅ Releasad 2026-10-03. Sidan visas när `HUBSPOT_SERVICE_KEY` finns i Vercel; AI-analysen kräver dessutom `FOLKE_LEAD_ANALYSIS_AI=on`. |
 

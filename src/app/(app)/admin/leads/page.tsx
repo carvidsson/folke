@@ -1,35 +1,27 @@
 import { Unplug } from "lucide-react";
 import type { Metadata } from "next";
 
-import { LeadAnalysisView } from "@/components/admin/lead-analysis-view";
 import { EmptyState } from "@/components/common/empty-state";
 import { Panel } from "@/components/common/panel";
 import { PageContainer, PageHeader } from "@/components/layout/page-header";
-import type { InboxOption } from "@/lib/leads/types";
-import { leadAnalysisExternalAllowed } from "@/server/ai/guard";
-import { defaultChatModel } from "@/server/ai/models";
+import { LeadAdmin } from "@/components/leads/lead-admin";
+import type { InboxOption, LeadInboxConfig } from "@/lib/leads/types";
 import { requireSystemAdminPage } from "@/server/auth/session";
-import { stockholmTime } from "@/server/leads/business-hours";
+import { getLeadSettings, listLeadGrants, listLeadInboxes, listLeadRegions } from "@/server/data/leads";
+import { listGroups, listUsers } from "@/server/data/users";
 import { hubSpotConfigured } from "@/server/leads/hubspot";
-import { inboxOptions, MAX_AI_DIALOGUES, MAX_PERIOD_DAYS } from "@/server/leads/service";
+import { inboxOptions } from "@/server/leads/service";
 
-export const metadata: Metadata = { title: "Leadanalys" };
-// The AI analysis runs in a server action on this page: allow the platform maximum.
-export const maxDuration = 300;
+export const metadata: Metadata = { title: "Leadanalys – inkorgar och åtkomst" };
 
-function isoDate(date: Date) {
-  const t = stockholmTime(date);
-  return `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`;
-}
-
-export default async function LeadAnalysisPage() {
+export default async function LeadAdminPage() {
   await requireSystemAdminPage();
 
   const header = (
     <PageHeader
-      eyebrow="Experiment"
-      title="Leadanalys"
-      description="Hur leads i en HubSpot-inkorg tas emot och besvaras. Statistiken räknas fram direkt ur HubSpot. AI-analysen är en separat, kvalitativ läsning av dialogerna."
+      eyebrow="Leadanalys"
+      title="Inkorgar och åtkomst"
+      description="Välj vilka HubSpot-inkorgar som ingår i leadanalysen, vilken region de hör till, och vem som får se vad."
     />
   );
 
@@ -38,35 +30,43 @@ export default async function LeadAnalysisPage() {
       <PageContainer>
         {header}
         <Panel className="mt-8">
-          <EmptyState
-            icon={Unplug}
-            title="HubSpot är inte anslutet"
-            description="Leadanalysen kräver en servicenyckel med behörigheten conversations.read i serverns miljö."
-          />
+          <EmptyState icon={Unplug} title="HubSpot är inte anslutet" description="Leadanalysen kräver en servicenyckel med behörigheten conversations.read i serverns miljö." />
         </Panel>
       </PageContainer>
     );
   }
 
-  let inboxes: InboxOption[] = [];
+  let hubspot: InboxOption[] = [];
   let loadError = false;
   try {
-    inboxes = await inboxOptions();
+    hubspot = await inboxOptions();
   } catch {
     loadError = true;
   }
+  const [configured, regions, grants, groups, users, settings] = await Promise.all([
+    listLeadInboxes(),
+    listLeadRegions(),
+    listLeadGrants(),
+    listGroups(),
+    listUsers(),
+    getLeadSettings(),
+  ]);
 
-  const today = new Date();
+  // Every HubSpot inbox, with Folke's configuration where there is one.
+  const byId = new Map(configured.map((c) => [c.id, c]));
+  const inboxes: LeadInboxConfig[] = hubspot.map((h) => byId.get(h.id) ?? { id: h.id, name: h.name, configured: false, active: false, regionId: null, facility: null, brand: null });
+
   return (
     <PageContainer>
       {header}
-      <LeadAnalysisView
+      <LeadAdmin
         inboxes={inboxes}
         loadError={loadError}
-        defaultFrom={isoDate(new Date(today.getTime() - 29 * 86_400_000))}
-        defaultTo={isoDate(today)}
-        maxPeriodDays={MAX_PERIOD_DAYS}
-        ai={{ enabled: leadAnalysisExternalAllowed(), model: defaultChatModel().label, maxDialogues: MAX_AI_DIALOGUES }}
+        regions={regions}
+        grants={grants}
+        groups={groups.map((g) => ({ id: g.id, name: g.name, members: g.memberIds.length }))}
+        users={users.filter((u) => u.status === "active").map((u) => ({ id: u.id, name: u.name, email: u.email }))}
+        threadTemplate={settings.template}
       />
     </PageContainer>
   );

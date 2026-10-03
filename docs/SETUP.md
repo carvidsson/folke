@@ -350,6 +350,9 @@ Under **Administration → AI och modeller → Modell per assistent** väljer du
   - Kostnaden loggas som `lead_analysis` i `ai_usage`.
   - Migrationer: `20261009090000_lead_analysis_usage.sql`, `20261010090000_lead_analysis_store.sql` och `20261010100000_lead_customer_wrote_last.sql`. Alla tre är körda i folke-dev och i folke (2026-10-03).
   - Strukturerad analysdata sparas i `lead_*`-tabellerna, aldrig meddelandetexter eller kunduppgifter (ADR-047).
+  - Översikt, regioner och åtkomst (ADR-048): migrationen `20261011090000_lead_overview_access.sql`. **Körd i folke-dev 2026-10-03, inte i folke.** Efter migrationen: välj inkorgar, region, anläggning och varumärke under **Administration → Leadanalys**, ge grupper eller användare åtkomst och hämta perioden från HubSpot på **Leadanalys**. Länken till HubSpot kräver att en systemadministratör klistrar in adressen till en riktig konversation (fliken Länk till HubSpot). Inga nya miljövariabler.
+  - Vad som syns i HubSpot, bilagor, Virtuell och visualiseringar (ADR-049): migrationen `20261012090000_lead_regnr_kind.sql` (`FACTS_VERSION` 3 och analysmetoden `lead-ai-3.1`). **Körd i folke-dev 2026-10-03, inte i folke.** Efter migrationen hämtas perioderna på nytt med Uppdatera från HubSpot, eftersom faktareglerna har ändrats. Länkmallen verifierades i folke-dev med en riktig konversation (portal 19862687).
+  - Prestanda för åtkomstreglerna (ADR-049): migrationen `20261013090000_lead_rls_performance.sql`. Samma regler, men mängden läsbara inkorgar räknas ut en gång per fråga i stället för per rad. **Körd i folke-dev 2026-10-03, inte i folke.**
   - Validering mot riktiga data (läsrättighet, AI med avidentifierade dialoger, kostar några cent): se ADR-047. Skripten används bara lokalt och checkas inte in.
 
 ### Testa

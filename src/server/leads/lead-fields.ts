@@ -81,6 +81,12 @@ export interface ParsedLead {
   model: string | null;
   /** Only a value in Swedish plate format; "Virtuell" and other placeholders give null. */
   regnr: string | null;
+  /**
+   * What the registration number field contained (ADR-048): a plate, the dealer system's placeholder
+   * "Virtuell" (used for listings without a physical car, e.g. incoming or to order – a signal, not a
+   * vehicle status), something else, or nothing. The number itself is never stored.
+   */
+  regnrKind: RegnrKind | null;
   carUrl: string | null;
   mileageKm: number | null;
   page: string | null;
@@ -110,6 +116,16 @@ function cleanText(value: string | undefined): string | null {
     .join("\n")
     .trim();
   return EMPTY.test(v) ? null : v;
+}
+
+export type RegnrKind = "plate" | "virtual" | "other";
+
+/** Case- and whitespace-insensitive; "Virtuell", " VIRTUELL ", "virtuell." count as virtual. */
+export function regnrKind(value: string | null): RegnrKind | null {
+  if (!value) return null;
+  if (PLATE.test(value)) return "plate";
+  if (value.toLowerCase().replace(/[^a-zåäö]/g, "") === "virtuell") return "virtual";
+  return "other";
 }
 
 function plate(value: string | null): string | null {
@@ -205,6 +221,7 @@ export function parseLeadText(text: string | null | undefined): ParsedLead {
     brand: clean(values.brand),
     model: clean(values.model),
     regnr: plate(regnrRaw),
+    regnrKind: regnrKind(regnrRaw),
     carUrl: url(clean(values.carUrl)),
     mileageKm: mileage(clean(values.mileage)),
     page: url(clean(values.page)),

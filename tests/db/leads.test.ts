@@ -1,8 +1,8 @@
 import type { PGlite, Transaction } from "@electric-sql/pglite";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { U, seedFixture } from "./fixtures";
-import { asAnon, asService, asUser, createTestDatabase } from "./harness";
+import { G, U, seedFixture } from "./fixtures";
+import { asAnon, asService, asServiceRollback, asUser, createTestDatabase } from "./harness";
 
 /**
  * Persistent lead analysis (ADR-047): system administrators only, upserts
@@ -195,8 +195,269 @@ describe("lead analysis store", () => {
     );
     const columns = rows.map((r) => r.column_name);
     // Counts such as customer_messages are fine; content and contact details are not.
-    const forbidden = columns.filter((c) => /^(text|message|messages|body|content|subject|customer_name|name_of_customer)$|email|phone|personnummer|regnr|registration/.test(c));
+    // regnr_kind holds only 'plate' | 'virtual' | 'other' (check constraint, tested below), never a number.
+    const allowed = new Set(["regnr_kind"]);
+    const forbidden = columns.filter((c) => !allowed.has(c) && /^(text|message|messages|body|content|subject|customer_name|name_of_customer)$|email|phone|personnummer|regnr|registration/.test(c));
     expect(forbidden).toEqual([]);
     expect(columns).toContain("customer_messages");
+  });
+});
+
+/**
+ * ADR-048: access per group or user, optionally limited to one region.
+ * Setup (as the database owner): two regions, an active inbox in each, an
+ * inactive inbox in region A, a lead in each inbox; the sales group may see
+ * region A only, the loner user all regions.
+ */
+describe("lead access per group, user and region", () => {
+  const RA = "a0000000-0000-4000-8000-000000000001";
+  const RB = "b0000000-0000-4000-8000-000000000002";
+
+  async function setup(tx: Transaction) {
+    await tx.query(`insert into public.lead_regions (id, name, sort_order) values ('${RA}', 'Test A', 10), ('${RB}', 'Test B', 11)`);
+    await tx.query(
+      `insert into public.lead_inboxes (hubspot_inbox_id, name, active, region_id) values
+        ('800001', 'A aktiv', true, '${RA}'), ('800002', 'B aktiv', true, '${RB}'), ('800003', 'A inaktiv', false, '${RA}')`,
+    );
+    await tx.query(
+      `insert into public.lead_threads (hubspot_thread_id, hubspot_inbox_id, facts_version, arrived_at, arrival_window, channel, reply_status) values
+        ('701', '800001', 2, '2026-09-02T08:00:00Z', 'business_hours', 'form', 'no_registered_reply'),
+        ('702', '800002', 2, '2026-09-02T08:00:00Z', 'business_hours', 'form', 'no_registered_reply'),
+        ('703', '800003', 2, '2026-09-02T08:00:00Z', 'business_hours', 'form', 'no_registered_reply')`,
+    );
+    await tx.query(`insert into public.lead_sellers (hubspot_actor_id, display_name) values ('A-1001', 'Sälja Säljarsson') on conflict do nothing`);
+    await tx.query(analysis("701", "lead-ai-3", FP_A));
+    await tx.query(analysis("702", "lead-ai-3", FP_A));
+    await tx.query(
+      `insert into public.lead_analysis_runs (scope_type, hubspot_inbox_id, region_id, period_from, period_to, analysis_version, model, facts_version, started_at, leads, dialogues_analysed, analysed_new, reused, facts, counts, created_by) values
+        ('inbox', '800001', null, '2026-09-01', '2026-09-30', 'lead-ai-3', 'gpt-6-luna', 2, now(), 1, 1, 1, 0, '{}', '{}', '${U.admin}'),
+        ('inbox', '800002', null, '2026-09-01', '2026-09-30', 'lead-ai-3', 'gpt-6-luna', 2, now(), 1, 1, 1, 0, '{}', '{}', '${U.admin}'),
+        ('region', null, '${RA}', '2026-09-01', '2026-09-30', 'lead-ai-3', 'gpt-6-luna', 2, now(), 1, 1, 0, 1, '{}', '{}', '${U.admin}'),
+        ('all', null, null, '2026-09-01', '2026-09-30', 'lead-ai-3', 'gpt-6-luna', 2, now(), 2, 2, 0, 2, '{}', '{}', '${U.admin}')`,
+    );
+    await tx.query(`insert into public.lead_access_grants (group_id, region_id) values ('${G.sales}', '${RA}')`);
+    await tx.query(`insert into public.lead_access_grants (user_id, region_id) values ('${U.loner}', null)`);
+  }
+
+  /** As the owner: set up; then as `user` run `fn` (one transaction, rolled back). */
+  async function withSetup(user: string, fn: (tx: Transaction) => Promise<void>) {
+    await asServiceRollback(db, async (tx) => {
+      await tx.exec("reset role");
+      await setup(tx);
+      const now = Math.floor(Date.now() / 1000);
+      await tx.query("select set_config('request.jwt.claims', $1, true)", [
+        JSON.stringify({ sub: user, role: "authenticated", aal: "aal2", amr: [{ method: "password", timestamp: now }, { method: "totp", timestamp: now }] }),
+      ]);
+      await tx.exec("set local role authenticated");
+      await fn(tx);
+    });
+  }
+
+  const ids = async (tx: Transaction, sql: string) => (await tx.query<{ id: string }>(sql)).rows.map((r) => r.id).sort();
+
+  it("a region-limited group sees only its region's active inboxes and their data", async () => {
+    await withSetup(U.seller, async (tx) => {
+      expect(await ids(tx, `select hubspot_inbox_id as id from public.lead_inboxes where hubspot_inbox_id like '8000%'`)).toEqual(["800001"]);
+      expect(await ids(tx, `select hubspot_thread_id as id from public.lead_threads where hubspot_thread_id like '70%'`)).toEqual(["701"]);
+      expect(await ids(tx, `select hubspot_thread_id as id from public.lead_dialogue_analyses where hubspot_thread_id like '70%'`)).toEqual(["701"]);
+      expect(await ids(tx, `select coalesce(hubspot_inbox_id, scope_type) as id from public.lead_analysis_runs where analysis_version = 'lead-ai-3'`)).toEqual(["800001", "region"]);
+      const access = await tx.query<{ a: { has_access: boolean; all_regions: boolean; region_ids: string[] } }>(`select public.my_lead_access() as a`);
+      expect(access.rows[0].a).toMatchObject({ has_access: true, all_regions: false, region_ids: [RA] });
+      // Region names are visible; the grants themselves are not.
+      expect((await tx.query(`select 1 from public.lead_regions`)).rows.length).toBeGreaterThan(0);
+      expect((await tx.query(`select 1 from public.lead_access_grants`)).rows).toHaveLength(0);
+    });
+  });
+
+  it("a user with access to all regions sees every active inbox, but not inactive ones", async () => {
+    await withSetup(U.loner, async (tx) => {
+      expect(await ids(tx, `select hubspot_inbox_id as id from public.lead_inboxes where hubspot_inbox_id like '8000%'`)).toEqual(["800001", "800002"]);
+      expect(await ids(tx, `select hubspot_thread_id as id from public.lead_threads where hubspot_thread_id like '70%'`)).toEqual(["701", "702"]);
+      expect((await tx.query(`select 1 from public.lead_analysis_runs where scope_type = 'all'`)).rows).toHaveLength(1);
+    });
+  });
+
+  it("users without a grant see nothing", async () => {
+    await withSetup(U.mechanic, async (tx) => {
+      for (const table of ["lead_regions", "lead_inboxes", "lead_threads", "lead_dialogue_analyses", "lead_analysis_runs", "lead_syncs", "lead_settings", "lead_sellers"]) {
+        expect((await tx.query(`select 1 from public.${table}`)).rows, table).toHaveLength(0);
+      }
+      const access = await tx.query<{ a: { has_access: boolean } }>(`select public.my_lead_access() as a`);
+      expect(access.rows[0].a.has_access).toBe(false);
+    });
+  });
+
+  it("stores only the kind of registration number, from a fixed set (never the number)", async () => {
+    await withSetup(U.seller, async (tx) => {
+      await tx.query(`update public.lead_threads set regnr_kind = 'virtual' where hubspot_thread_id = '701'`);
+      expect((await tx.query<{ k: string }>(`select regnr_kind as k from public.lead_threads where hubspot_thread_id = '701'`)).rows[0].k).toBe("virtual");
+      await expectDenied(tx, `update public.lead_threads set regnr_kind = 'ABC123' where hubspot_thread_id = '701'`);
+      await expectDenied(tx, `update public.lead_threads set regnr_kind = 'Virtuell' where hubspot_thread_id = '701'`);
+    });
+  });
+
+  it("a region-limited user can refresh their own region only, and configure nothing", async () => {
+    await withSetup(U.seller, async (tx) => {
+      await tx.query(`update public.lead_threads set source = 'Blocket' where hubspot_thread_id = '701'`);
+      await tx.query(`insert into public.lead_syncs (hubspot_inbox_id, period_from, period_to, complete, synced_by) values ('800001', '2026-09-01', '2026-09-30', true, '${U.seller}')`);
+      await expectDenied(tx, `insert into public.lead_threads (hubspot_thread_id, hubspot_inbox_id, facts_version, arrived_at, arrival_window, channel, reply_status) values ('799', '800002', 2, now(), 'weekend', 'form', 'no_registered_reply')`);
+      await expectDenied(tx, `update public.lead_threads set source = 'X' where hubspot_thread_id = '702'`);
+      await expectDenied(tx, `insert into public.lead_syncs (hubspot_inbox_id, period_from, period_to, complete, synced_by) values ('800002', '2026-09-01', '2026-09-30', true, '${U.seller}')`);
+      await expectDenied(tx, `insert into public.lead_syncs (hubspot_inbox_id, period_from, period_to, complete, synced_by) values ('800001', '2026-09-01', '2026-09-30', true, '${U.admin}')`);
+      await expectDenied(tx, `update public.lead_inboxes set active = false where hubspot_inbox_id = '800001'`);
+      await expectDenied(tx, `insert into public.lead_regions (name) values ('Kapad')`);
+      await expectDenied(tx, `insert into public.lead_access_grants (user_id, region_id) values ('${U.seller}', null)`);
+      await expectDenied(tx, `update public.lead_settings set hubspot_thread_url_template = 'https://x.example/{threadId}'`);
+      await expectDenied(
+        tx,
+        `insert into public.lead_analysis_runs (scope_type, region_id, period_from, period_to, analysis_version, model, facts_version, started_at, leads, dialogues_analysed, analysed_new, reused, facts, counts, created_by) values ('all', null, '2026-09-01', '2026-09-30', 'lead-ai-3', 'gpt-6-luna', 2, now(), 0, 0, 0, 0, '{}', '{}', '${U.seller}')`,
+      );
+      await tx.query(
+        `insert into public.lead_analysis_runs (scope_type, region_id, period_from, period_to, analysis_version, model, facts_version, started_at, leads, dialogues_analysed, analysed_new, reused, facts, counts, created_by) values ('region', '${RA}', '2026-09-01', '2026-09-30', 'lead-ai-3', 'gpt-6-luna', 2, now(), 0, 0, 0, 0, '{}', '{}', '${U.seller}')`,
+      );
+    });
+  });
+
+  /**
+   * 20261013090000_lead_rls_performance: the new policies must give exactly what the earlier model gave.
+   * The earlier model is still in the database (app.can_read_lead_inbox / app.can_read_lead_thread), so
+   * for every user the expected rows are computed with it as the owner (no RLS), and compared with what
+   * the same user gets through the new policies – for reading and for writing, per table.
+   */
+  it("the per-query policies equal the earlier per-row model for every kind of user (read and write)", async () => {
+    await asServiceRollback(db, async (tx) => {
+      await tx.exec("reset role");
+      await setup(tx);
+      // More cases: an active inbox without region, analyses for every thread, a sync per inbox,
+      // and a user with both a group grant (region A) and a user grant (region B).
+      await tx.query(`insert into public.lead_inboxes (hubspot_inbox_id, name, active, region_id) values ('800004', 'Utan region', true, null)`);
+      await tx.query(
+        `insert into public.lead_threads (hubspot_thread_id, hubspot_inbox_id, facts_version, arrived_at, arrival_window, channel, reply_status) values ('704', '800004', 2, '2026-09-02T08:00:00Z', 'business_hours', 'form', 'no_registered_reply')`,
+      );
+      await tx.query(analysis("703", "lead-ai-3", FP_A));
+      await tx.query(analysis("704", "lead-ai-3", FP_A));
+      for (const inbox of ["800001", "800002", "800003", "800004"]) {
+        await tx.query(`insert into public.lead_syncs (hubspot_inbox_id, period_from, period_to, complete, synced_by) values ('${inbox}', '2026-09-01', '2026-09-30', true, '${U.admin}')`);
+      }
+      await tx.query(`insert into public.lead_access_grants (user_id, region_id) values ('${U.salesManager}', '${RB}')`);
+
+      const claims = async (user: string, aal: "aal1" | "aal2") => {
+        const now = Math.floor(Date.now() / 1000);
+        const amr = aal === "aal2" ? [{ method: "password", timestamp: now }, { method: "totp", timestamp: now }] : [{ method: "password", timestamp: now }];
+        await tx.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: user, role: "authenticated", aal, amr })]);
+      };
+      const set = async (sql: string) => (await tx.query<{ id: string }>(sql)).rows.map((r) => String(r.id)).sort();
+      const cases: [string, string, "aal1" | "aal2"][] = [
+        ["systemadministratör", U.admin, "aal2"],
+        ["systemadministratör utan MFA-session", U.admin, "aal1"],
+        ["grupp med region A", U.seller, "aal2"],
+        ["grupp A och användare B", U.salesManager, "aal2"],
+        ["alla regioner", U.loner, "aal2"],
+        ["ingen behörighet", U.mechanic, "aal2"],
+        ["spärrad användare", U.disabled, "aal2"],
+      ];
+      const seen: Record<string, number> = {};
+      for (const [label, user, aal] of cases) {
+        await claims(user, aal);
+        // Earlier model, evaluated as the owner (RLS does not apply to the owner).
+        await tx.exec("reset role");
+        const expected = {
+          threads: await set(`select hubspot_thread_id as id from public.lead_threads where hubspot_thread_id like '70%' and app.can_read_lead_inbox(hubspot_inbox_id)`),
+          syncs: await set(`select hubspot_inbox_id as id from public.lead_syncs where hubspot_inbox_id like '8000%' and app.can_read_lead_inbox(hubspot_inbox_id)`),
+          analyses: await set(`select hubspot_thread_id as id from public.lead_dialogue_analyses where hubspot_thread_id like '70%' and app.can_read_lead_thread(hubspot_thread_id)`),
+          writable: await set(`select hubspot_inbox_id as id from public.lead_inboxes where hubspot_inbox_id like '8000%' and app.can_read_lead_inbox(hubspot_inbox_id)`),
+        };
+        // New policies, as the user.
+        await tx.exec("set local role authenticated");
+        const actual = {
+          threads: await set(`select hubspot_thread_id as id from public.lead_threads where hubspot_thread_id like '70%'`),
+          syncs: await set(`select hubspot_inbox_id as id from public.lead_syncs where hubspot_inbox_id like '8000%'`),
+          analyses: await set(`select hubspot_thread_id as id from public.lead_dialogue_analyses where hubspot_thread_id like '70%'`),
+          writable: [] as string[],
+        };
+        // Writing: insert a thread and a sync, update a thread and insert an analysis, per inbox.
+        const threadOf: Record<string, string> = { "800001": "701", "800002": "702", "800003": "703", "800004": "704" };
+        for (const inbox of ["800001", "800002", "800003", "800004"]) {
+          const ok = async (sql: string, params: unknown[] = []) => {
+            await tx.exec("savepoint w");
+            try {
+              const r = await tx.query(sql, params);
+              const done = /^\s*update/i.test(sql) ? (r.affectedRows ?? 0) > 0 : true;
+              await tx.exec("rollback to savepoint w");
+              return done;
+            } catch {
+              await tx.exec("rollback to savepoint w");
+              return false;
+            }
+          };
+          const results = [
+            await ok(`insert into public.lead_threads (hubspot_thread_id, hubspot_inbox_id, facts_version, arrived_at, arrival_window, channel, reply_status) values ('79${inbox}', '${inbox}', 2, now(), 'weekend', 'form', 'no_registered_reply')`),
+            await ok(`insert into public.lead_syncs (hubspot_inbox_id, period_from, period_to, complete, synced_by) values ('${inbox}', '2026-09-01', '2026-09-30', true, '${user}')`),
+            await ok(`update public.lead_threads set source = 'Test' where hubspot_thread_id = '${threadOf[inbox]}'`),
+            await ok(analysis(threadOf[inbox], "lead-ai-x", FP_B)),
+          ];
+          // Either every write is allowed for the inbox or none is – and that must match the earlier model.
+          expect(new Set(results).size, `${label} ${inbox}: ${results}`).toBe(1);
+          if (results[0]) actual.writable.push(inbox);
+        }
+        expect(actual, label).toEqual(expected);
+        seen[label] = actual.threads.length;
+        await tx.exec("reset role");
+      }
+      // The cases really differ (the comparison is not trivially empty).
+      expect(seen).toEqual({
+        systemadministratör: 4,
+        "systemadministratör utan MFA-session": 0,
+        "grupp med region A": 1,
+        "grupp A och användare B": 2,
+        "alla regioner": 3,
+        "ingen behörighet": 0,
+        "spärrad användare": 0,
+      });
+    });
+  });
+
+  it("explicitly: a user in region A cannot read or write region B's lead, analysis or sync", async () => {
+    await withSetup(U.seller, async (tx) => {
+      await tx.exec("reset role");
+      await tx.query(`insert into public.lead_syncs (hubspot_inbox_id, period_from, period_to, complete, synced_by) values ('800002', '2026-09-01', '2026-09-30', true, '${U.admin}')`);
+      await tx.exec("set local role authenticated");
+      expect((await tx.query(`select 1 from public.lead_threads where hubspot_thread_id = '702'`)).rows).toHaveLength(0);
+      expect((await tx.query(`select 1 from public.lead_dialogue_analyses where hubspot_thread_id = '702'`)).rows).toHaveLength(0);
+      expect((await tx.query(`select 1 from public.lead_syncs where hubspot_inbox_id = '800002'`)).rows).toHaveLength(0);
+      // Not even by joining through a table the user may read.
+      expect((await tx.query(`select 1 from public.lead_dialogue_analyses a join public.lead_threads t using (hubspot_thread_id) where t.hubspot_inbox_id = '800002'`)).rows).toHaveLength(0);
+      await expectDenied(tx, `update public.lead_dialogue_analyses set evidence = 'limited' where hubspot_thread_id = '702'`);
+      await expectDenied(tx, analysis("702", "lead-ai-x", FP_B));
+      // The helper only reveals what the user may read anyway: region A's active inbox.
+      expect((await tx.query<{ a: string[] }>(`select app.readable_lead_inboxes() as a`)).rows[0].a.filter((i) => i.startsWith("8000"))).toEqual(["800001"]);
+    });
+  });
+
+  it("the helper function is SECURITY DEFINER with an empty search_path and can only be executed by authenticated and service_role", async () => {
+    const { rows } = await db.query<{ definer: boolean; config: string[] | null; volatile: string; acl: string }>(
+      `select p.prosecdef as definer, p.proconfig as config, p.provolatile as volatile, p.proacl::text as acl
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'app' and p.proname = 'readable_lead_inboxes'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ definer: true, volatile: "s", config: ["search_path=\"\""] });
+    const grantees = [...rows[0].acl.matchAll(/(\w*)=X/g)].map((m) => m[1] || "PUBLIC").sort();
+    expect(grantees.filter((g) => !["postgres", "supabase_admin"].includes(g))).toEqual(["authenticated", "service_role"]);
+    for (const role of ["anon", "PUBLIC"]) expect(grantees).not.toContain(role);
+  });
+
+  it("an inactive inbox and a removed grant hide the data again", async () => {
+    await withSetup(U.seller, async (tx) => {
+      await tx.exec("reset role");
+      await tx.query(`update public.lead_inboxes set active = false where hubspot_inbox_id = '800001'`);
+      await tx.exec("set local role authenticated");
+      expect((await tx.query(`select 1 from public.lead_threads where hubspot_thread_id like '70%'`)).rows).toHaveLength(0);
+    });
+    await withSetup(U.seller, async (tx) => {
+      await tx.exec("reset role");
+      await tx.query(`delete from public.lead_access_grants where group_id = '${G.sales}'`);
+      await tx.exec("set local role authenticated");
+      expect((await tx.query(`select 1 from public.lead_inboxes where hubspot_inbox_id like '8000%'`)).rows).toHaveLength(0);
+    });
   });
 });

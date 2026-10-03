@@ -51,6 +51,9 @@ const ACTION_LABELS: Record<string, [string, StatusTone]> = {
   "ai.instructions_changed": ["AI-instruktioner ändrade", "info"],
   "leads.report_generated": ["Leadanalys hämtad från HubSpot", "info"],
   "leads.ai_analysis_run": ["Leaddialoger analyserade med AI", "warning"],
+  "leads.synced": ["Leads hämtade från HubSpot", "info"],
+  "leads.config_changed": ["Leadanalysens inställningar ändrade", "info"],
+  "leads.access_changed": ["Åtkomst till leadanalys ändrad", "warning"],
   "conversations.purge": ["Gallring av konversationer", "warning"],
 };
 

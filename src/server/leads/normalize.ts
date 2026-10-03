@@ -5,6 +5,7 @@ import type { ExclusionReason, LeadRow, ResponseStatus } from "@/lib/leads/types
 import { arrivalWindow, businessMinutesBetween, calendarMinutesBetween } from "./business-hours";
 import { EMAIL_CHANNEL, FORMS_CHANNEL, type HubSpotMessage, type HubSpotThread } from "./hubspot";
 import { parseLeadText, type ParsedLead } from "./lead-fields";
+import { identifyVehicle } from "./vehicle";
 
 /**
  * From a HubSpot thread and its history to the facts of one lead. The rules
@@ -62,11 +63,29 @@ export function classifyEvent(m: HubSpotMessage): EventKind {
   }
 }
 
+/**
+ * A file sent with a message, as far as it can be told from HubSpot's metadata (verified 2026-10-03:
+ * `attachments: [{ type: "FILE", name, fileUsageType: "IMAGE" | "OTHER", … }]`). An attachment is only
+ * an offer document when its file name says so – otherwise Folke only knows that a file was sent.
+ */
+export type AttachmentKind = "offer_document" | "document" | "image";
+
+const OFFER_FILE = /offert|kalkyl|offer|quote|leasingförslag|finansieringsförslag|prisförslag/i;
+const IMAGE_FILE = /\.(png|jpe?g|gif|heic|webp|bmp)$/i;
+
+export function attachmentKind(a: { type?: string | null; name?: string | null; fileUsageType?: string | null }): AttachmentKind {
+  const name = a.name ?? "";
+  if (a.fileUsageType === "IMAGE" || IMAGE_FILE.test(name)) return "image";
+  return OFFER_FILE.test(name) ? "offer_document" : "document";
+}
+
 export interface DialogueMessage {
   role: "customer" | "seller";
   sellerId: string | null;
   at: string;
   text: string;
+  /** Kinds of attached files (never their names). */
+  attachments: AttachmentKind[];
   /** Sender names HubSpot reports (for redaction only). */
   senderName: string | null;
 }
@@ -143,7 +162,7 @@ export function normalizeThread(
 
   const answeredAt = status === "registered_reply" && firstSeller ? new Date(firstSeller.m.createdAt) : null;
   const channelId = first.m.channelId;
-  const parsed = channelId === FORMS_CHANNEL ? parseLeadText(first.m.text) : null;
+  const parsed = channelId === FORMS_CHANNEL ? parseLeadText(messageText(first.m)) : null;
   const formName = first.m.channelAccountId ? (context.formNames.get(first.m.channelAccountId) ?? null) : null;
 
   const row: LeadRow = {
@@ -167,6 +186,15 @@ export function normalizeThread(
     sellerMessages: events.filter((e) => e.kind === "seller").length,
     internalComments: events.filter((e) => e.kind === "comment").length,
     customerWroteLast: false,
+    inboxId: context.inboxId,
+    latestMessageAt: null,
+    lastCustomerMessageAt: null,
+    firstSellerAfterCustomerAt: null,
+    followedUp: false,
+    vehicleBrand: null,
+    vehicleModel: null,
+    vehicleSource: null,
+    regnrKind: parsed?.regnrKind ?? null,
   };
 
   const dialogue: DialogueMessage[] = events
@@ -178,8 +206,22 @@ export function normalizeThread(
       // The form lead's own text is represented by its parsed message only.
       text: e.m === first.m && parsed && parsed.format !== "unknown" ? (parsed.message ?? "") : messageText(e.m),
       senderName: e.m.senders?.[0]?.name ?? null,
+      attachments: (e.m.attachments ?? []).map(attachmentKind),
     }));
 
   row.customerWroteLast = status === "registered_reply" && dialogue.at(-1)?.role === "customer";
+
+  // Message times for deterministic follow-up facts (same rules as followUpSituation).
+  const lastCustomer = dialogue.map((m) => m.role).lastIndexOf("customer");
+  const after = dialogue.slice(lastCustomer + 1);
+  row.lastCustomerMessageAt = lastCustomer >= 0 ? dialogue[lastCustomer].at : null;
+  row.firstSellerAfterCustomerAt = after[0]?.at ?? null;
+  row.followedUp = after.length > 0 && after.some((m) => Date.parse(m.at) - Date.parse(after[0].at) >= 86_400_000);
+  row.latestMessageAt = thread.latestMessageTimestamp ?? events.at(-1)?.m.createdAt ?? null;
+
+  const vehicle = identifyVehicle(parsed);
+  row.vehicleBrand = vehicle.brand;
+  row.vehicleModel = vehicle.model;
+  row.vehicleSource = vehicle.source;
   return { ok: true, lead: { row, parsed, dialogue } };
 }

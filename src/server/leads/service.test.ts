@@ -6,7 +6,8 @@ import { resetServerEnvForTests } from "@/server/env";
 import { ANALYSIS_VERSION } from "./analysis";
 import { LISTING_TEXT, MemoryLeadStore, SELLER_A, SYNTHETIC_CUSTOMER } from "./fixtures.test-helpers";
 import { setHubSpotFetchForTests } from "./hubspot";
-import { analyseLeads, clearLeadCachesForTests, collectLeads } from "./service";
+import { analyseInbox, clearLeadCachesForTests, summariseScope } from "./service";
+import { syncInbox } from "./sync";
 
 vi.mock("@/server/ai/limits", () => ({
   beginAIRequest: vi.fn(async () => ({ ok: true, requestId: "req-1" })),
@@ -19,21 +20,20 @@ const usage = await import("@/server/ai/usage");
 
 const KEY = "pat-test-placeholder-not-a-real-key";
 const SELLER_NAME = "Sälja Säljarsson";
-const INBOX = "900001";
+const INBOX = { id: "900001", name: "Testinkorg" };
+const PERIOD = { from: "2026-09-01", to: "2026-09-30" };
+const NOW = new Date("2026-09-03T12:00:00.000Z");
 
 // ---------------------------------------------------------------------------
 // A synthetic inbox: two leads in September, one older thread, one unreadable.
 // ---------------------------------------------------------------------------
 
-const threads = [
-  { id: "11", createdAt: "2026-09-02T08:00:00.000Z", status: "CLOSED", inboxId: INBOX, assignedTo: SELLER_A, latestMessageTimestamp: "2026-09-02T09:00:00.000Z" },
-  { id: "12", createdAt: "2026-09-05T10:00:00.000Z", status: "OPEN", inboxId: INBOX, assignedTo: null, latestMessageTimestamp: "2026-09-05T10:00:00.000Z" },
-  { id: "13", createdAt: "2026-08-20T10:00:00.000Z", status: "CLOSED", inboxId: INBOX, assignedTo: SELLER_A, latestMessageTimestamp: "2026-09-03T10:00:00.000Z" },
-  { id: "14", createdAt: "2026-09-10T10:00:00.000Z", status: "OPEN", inboxId: INBOX, assignedTo: null, latestMessageTimestamp: "2026-09-10T10:00:00.000Z" },
-];
+let threads: Record<string, unknown>[];
+let messages: Record<string, unknown[]>;
+let messageCalls: string[];
 
-const customer = (createdAt: string, text: string) => ({
-  id: `c-${createdAt}`,
+const customer = (id: string, createdAt: string, text: string) => ({
+  id,
   type: "MESSAGE",
   createdAt,
   createdBy: "V-1",
@@ -46,27 +46,41 @@ const customer = (createdAt: string, text: string) => ({
   status: { statusType: "RECEIVED" },
 });
 
-const messages: Record<string, unknown[]> = {
-  "11": [
-    {
-      id: "s1",
-      type: "MESSAGE",
-      createdAt: "2026-09-02T09:00:00.000Z",
-      createdBy: SELLER_A,
-      direction: "OUTGOING",
-      channelId: "1002",
-      // Verified shape of HubSpot's sender name: "<seller> <mailbox name>".
-      senders: [{ actorId: SELLER_A, name: `${SELLER_NAME} Börjessons Bil` }],
-      text: `Hej Testa! Bilen är tyvärr såld. Ring mig på 070-000 00 09.\nMvh\n${SELLER_NAME}\nBilhandlare Test`,
-      client: { clientType: "HUBSPOT" },
-      status: { statusType: "SENT" },
-    },
-    { id: "e1", type: "ASSIGNMENT", createdAt: "2026-09-02T09:00:00.100Z", createdBy: SELLER_A, senders: [{ actorId: "S-hubspot" }], client: { clientType: "SYSTEM" }, assignedTo: SELLER_A },
-    customer("2026-09-02T08:00:00.000Z", LISTING_TEXT),
-  ],
-  "12": [customer("2026-09-05T10:00:00.000Z", LISTING_TEXT)],
-  "13": [customer("2026-08-20T10:00:00.000Z", LISTING_TEXT)],
-};
+const seller = (id: string, createdAt: string, text: string) => ({
+  id,
+  type: "MESSAGE",
+  createdAt,
+  createdBy: SELLER_A,
+  direction: "OUTGOING",
+  channelId: "1002",
+  // Verified shape of HubSpot's sender name: "<seller> <mailbox name>".
+  senders: [{ actorId: SELLER_A, name: `${SELLER_NAME} Börjessons Bil` }],
+  text,
+  client: { clientType: "HUBSPOT" },
+  status: { statusType: "SENT" },
+});
+
+function reset() {
+  threads = [
+    { id: "11", createdAt: "2026-09-02T08:00:00.000Z", status: "CLOSED", inboxId: INBOX.id, assignedTo: SELLER_A, latestMessageTimestamp: "2026-09-02T09:00:00.000Z" },
+    { id: "12", createdAt: "2026-09-05T10:00:00.000Z", status: "OPEN", inboxId: INBOX.id, assignedTo: null, latestMessageTimestamp: "2026-09-05T10:00:00.000Z" },
+    { id: "13", createdAt: "2026-08-20T10:00:00.000Z", status: "CLOSED", inboxId: INBOX.id, assignedTo: SELLER_A, latestMessageTimestamp: "2026-09-03T10:00:00.000Z" },
+    { id: "14", createdAt: "2026-09-10T10:00:00.000Z", status: "OPEN", inboxId: INBOX.id, assignedTo: null, latestMessageTimestamp: "2026-09-10T10:00:00.000Z" },
+  ];
+  messages = {
+    "11": [
+      {
+        ...seller("s1", "2026-09-02T09:00:00.000Z", `Hej Testa! Bilen är tyvärr såld. Ring mig på 070-000 00 09.\nMvh\n${SELLER_NAME}\nBilhandlare Test`),
+        // An offer-like PDF whose file name contains the customer's name: only its kind may reach the model.
+        attachments: [{ type: "FILE", fileId: "1", name: `Offert ${SYNTHETIC_CUSTOMER.name}.pdf`, fileUsageType: "OTHER", url: "https://files.example/secret" }],
+      },
+      { id: "e1", type: "ASSIGNMENT", createdAt: "2026-09-02T09:00:00.100Z", createdBy: SELLER_A, senders: [{ actorId: "S-hubspot" }], client: { clientType: "SYSTEM" }, assignedTo: SELLER_A },
+      customer("c1", "2026-09-02T08:00:00.000Z", LISTING_TEXT),
+    ],
+    "12": [customer("c2", "2026-09-05T10:00:00.000Z", LISTING_TEXT)],
+    "13": [customer("c3", "2026-08-20T10:00:00.000Z", LISTING_TEXT)],
+  };
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -78,11 +92,11 @@ function fakeHubSpot() {
       expect(init?.method).toBe("GET");
       const url = new URL(String(input));
       const path = url.pathname.replace("/conversations/v3/conversations", "");
-      if (path === "/inboxes") return json({ results: [{ id: INBOX, name: "Testinkorg", archived: false }] });
-      if (path === "/channel-accounts") return json({ results: [{ id: "700001", name: "Leadsväxel – test", channelId: "1003", inboxId: INBOX }] });
+      if (path === "/channel-accounts") return json({ results: [{ id: "700001", name: "Leadsväxel – test", channelId: "1003", inboxId: INBOX.id }] });
       if (path === "/threads") return json({ results: threads });
       if (path === `/actors/${SELLER_A}`) return json({ id: SELLER_A, type: "AGENT", name: SELLER_NAME, email: "salja@folke.example" });
       const m = /^\/threads\/(\d+)\/messages$/.exec(path);
+      if (m) messageCalls.push(m[1]);
       if (m && messages[m[1]]) return json({ results: messages[m[1]] });
       return json({ message: "boom" }, 500);
     }) as typeof fetch,
@@ -92,8 +106,9 @@ function fakeHubSpot() {
 
 type Request = { instructions: string; input: { content: string }[]; store: boolean; text: { format: { type: string; strict: boolean; name: string } } } & Record<string, unknown>;
 let sent: Request[];
-/** What the fake model answers for every dialogue (tests may change it). */
-let observation = "Säljaren svarade snabbt men erbjöd inget alternativ.";
+let observation: string;
+/** Classification calls that answer without any dialogue (the model leaving dialogues out). */
+let omitNext = 0;
 
 const judgement = (status: string, reason = "") => ({ status, reason });
 
@@ -103,18 +118,40 @@ function fakeOpenAI() {
     responses: {
       create: vi.fn(async (body: Request) => {
         sent.push(body);
+        const omit = body.text.format.name !== "lead_summary" && omitNext > 0;
+        if (omit) omitNext--;
+        const keys = omit ? [] : [...body.input[0].content.matchAll(/"id":"(D\d+)"|=== Dialog (D\d+) ===/g)].map((m) => m[1] ?? m[2]);
         const output =
           body.text.format.name === "lead_summary"
             ? {
-                strengths: ["Snabba svar"],
-                improvements: ["Säljare 1 kan erbjuda alternativ"],
-                sold_cars: "En dialog.",
-                seller_patterns: [{ seller: "Säljare 1", observations: ["För litet underlag."] }],
-                caveats: [],
+                findings: [
+                  { title: "Sålda bilar utan alternativ", text: "När bilen är såld erbjuds sällan något annat.", kind: "opportunity", dialogues: keys.slice(0, 3) },
+                  { title: "Bara en dialog", text: "För svagt.", kind: "other", dialogues: [keys[0]] },
+                ],
+                seller_patterns: [{ seller: "Säljare 1", strengths: [{ text: "Säljare 1 svarar snabbt.", dialogues: keys.slice(0, 2) }], stalls: [], note: "För litet underlag för slutsatser." }],
+                limits: "Underlaget räcker inte för att säga något om provkörningar.",
+                caveats: ["Telefonkontakt syns inte."],
               }
             : {
-                dialogues: [...body.input[0].content.matchAll(/=== Dialog (D\d+) ===/g)].map((m) => ({
-                  id: m[1],
+                dialogues: keys.map((id) => ({
+                  id,
+                  situation: {
+                    goal: "Vill veta om bilen finns kvar.",
+                    questions: [{ text: "Finns bilen kvar?", answered: "yes" }],
+                    signals: [],
+                    timeframe: "",
+                    budget: "",
+                    objections: [],
+                    info_needed: [],
+                    progress: "stalled",
+                    progress_reason: "Bilen var såld och inget alternativ erbjöds.",
+                    missed_opportunity: "yes",
+                    missed_reason: observation,
+                    continuation: "visible",
+                    agreed_next_step: false,
+                    opportunities: ["sold_without_alternative"],
+                    strengths: [],
+                  },
                   intent: "availability",
                   purchase_intent: "interested",
                   car_status: "sold_or_reserved",
@@ -126,7 +163,7 @@ function fakeOpenAI() {
                     visit_or_test_drive: judgement("not_relevant"),
                     follow_up: judgement("not_relevant"),
                   },
-                  observations: [observation],
+                  observations: ["Säljaren svarade snabbt."],
                   evidence: "limited",
                 })),
               };
@@ -141,16 +178,18 @@ function fakeOpenAI() {
 }
 
 let store: MemoryLeadStore;
-const NOW = new Date("2026-09-03T12:00:00.000Z");
 
 beforeEach(() => {
   process.env.HUBSPOT_SERVICE_KEY = KEY;
   resetServerEnvForTests();
   clearLeadCachesForTests();
+  reset();
+  messageCalls = [];
+  observation = "Bilen var såld och inget alternativ erbjöds.";
+  omitNext = 0;
   fakeHubSpot();
   fakeOpenAI();
   store = new MemoryLeadStore();
-  observation = "Säljaren svarade snabbt men erbjöd inget alternativ.";
   vi.mocked(usage.recordChatUsage).mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -163,198 +202,185 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const PERIOD = { inboxId: INBOX, from: "2026-09-01", to: "2026-09-30" };
-const SECRETS = [KEY, SYNTHETIC_CUSTOMER.name, SYNTHETIC_CUSTOMER.email, SYNTHETIC_CUSTOMER.phone, "Finns bilen kvar", "070-000 00 09", "Testa"];
+const SECRETS = [KEY, SYNTHETIC_CUSTOMER.name, SYNTHETIC_CUSTOMER.email, SYNTHETIC_CUSTOMER.phone, "Finns bilen kvar?\nJag undrar", "070-000 00 09", "Testa"];
 
-describe("collecting leads", () => {
-  it("selects threads created in the period and reports partial failures", async () => {
-    const { report } = await collectLeads(PERIOD, store);
-    expect(report.dataset).toMatchObject({ threadsFetched: 4, outsidePeriod: 1, leads: 2, complete: false });
-    expect(report.dataset.excluded).toEqual([{ reason: "fetch_failed", count: 1 }]);
-    expect(report.limitations[0]).toMatch(/1 trådar kunde inte läsas/);
-    expect(report.facts.status).toEqual({ registered_reply: 1, no_registered_reply: 1, uncertain: 0 });
-    expect(report.sellers).toEqual([expect.objectContaining({ id: SELLER_A, name: SELLER_NAME, firstResponses: 1, smallSample: true })]);
-    expect(report.leads[0]).toMatchObject({ threadId: "11", calendarMinutes: 60, businessMinutes: 60, source: "Blocket", vehicle: "Volkswagen ID.4" });
-    expect(report.history).toEqual({ months: [], runs: [] });
-  });
-
-  it("never puts customer details, message texts or the key in the report or the stored facts", async () => {
-    const { report } = await collectLeads(PERIOD, store);
-    const serialized = JSON.stringify(report);
-    for (const secret of SECRETS) {
-      expect(serialized).not.toContain(secret);
-      expect(store.analysisData()).not.toContain(secret);
-    }
-    // Facts are persisted per lead, with the seller's stable HubSpot id.
-    expect([...store.threads.keys()]).toEqual(["11", "12"]);
+describe("syncing from HubSpot", () => {
+  it("stores the period's leads, records incomplete coverage and keeps no personal data", async () => {
+    const result = await syncInbox(INBOX, PERIOD, store);
+    expect(result).toMatchObject({ leads: 3, threadsRead: 2, failed: 1, complete: false });
+    expect([...store.threads.keys()].sort()).toEqual(["11", "12"]);
+    expect(store.syncs).toEqual([{ inboxId: INBOX.id, from: PERIOD.from, to: PERIOD.to, leads: 3, complete: false }]);
+    const lead = store.threads.get("11")!;
+    expect(lead).toMatchObject({ status: "registered_reply", vehicleBrand: "Volkswagen", vehicleModel: "ID.4", vehicleSource: "fields", latestMessageAt: "2026-09-02T09:00:00.000Z" });
+    expect(lead.firstSellerAfterCustomerAt).toBe("2026-09-02T09:00:00.000Z");
     expect(store.sellers.get(SELLER_A)).toBe(SELLER_NAME);
+    for (const secret of SECRETS) expect(store.analysisData()).not.toContain(secret);
   });
 
-  it("still reports when the facts cannot be saved", async () => {
-    const failing = Object.assign(new MemoryLeadStore(), { saveFacts: async () => Promise.reject(new Error("db")) });
-    const { report } = await collectLeads(PERIOD, failing);
-    expect(report.dataset.leads).toBe(2);
-    expect(report.history).toBeNull();
-    expect(report.limitations[0]).toMatch(/kunde inte sparas/);
+  it("does not read unchanged threads again", async () => {
+    await syncInbox(INBOX, PERIOD, store);
+    messageCalls = [];
+    const again = await syncInbox(INBOX, PERIOD, store);
+    // 11 and 12 unchanged; 14 still fails (first try + three retries).
+    expect(again).toMatchObject({ unchanged: 2, threadsRead: 0 });
+    expect(messageCalls).toEqual(["14", "14", "14", "14"]);
   });
 
-  it("reads each thread history once while it is unchanged", async () => {
-    const spy = vi.fn();
-    await collectLeads(PERIOD, store);
-    setHubSpotFetchForTests(
-      (async (input: string | URL | Request) => {
-        spy(new URL(String(input)).pathname);
-        const path = new URL(String(input)).pathname;
-        if (path.endsWith("/threads")) return json({ results: threads });
-        if (path.endsWith("/inboxes")) return json({ results: [{ id: INBOX, name: "Testinkorg" }] });
-        return json({ message: "should be cached" }, 500);
-      }) as typeof fetch,
-      async () => {},
-    );
-    const { report } = await collectLeads(PERIOD, store);
-    expect(report.dataset.leads).toBe(2);
-    expect(spy.mock.calls.filter(([p]) => /\/messages$/.test(p as string)).map(([p]) => p)).toEqual([
-      // Only the thread that failed before is read again (first try + three retries).
-      "/conversations/v3/conversations/threads/14/messages",
-      "/conversations/v3/conversations/threads/14/messages",
-      "/conversations/v3/conversations/threads/14/messages",
-      "/conversations/v3/conversations/threads/14/messages",
-    ]);
+  it("reads a thread again when its latest message changed", async () => {
+    await syncInbox(INBOX, PERIOD, store);
+    threads[0].latestMessageTimestamp = "2026-09-04T09:00:00.000Z";
+    messages["11"].push(customer("c9", "2026-09-04T09:00:00.000Z", "Har ni någon liknande bil?"));
+    clearLeadCachesForTests();
+    messageCalls = [];
+    await syncInbox(INBOX, PERIOD, store);
+    expect(messageCalls.filter((t) => t === "11")).toHaveLength(1);
+    expect(store.threads.get("11")).toMatchObject({ customerWroteLast: true, lastCustomerMessageAt: "2026-09-04T09:00:00.000Z" });
   });
 });
 
-describe("AI analysis of leads", () => {
-  it("sends only redacted, pseudonymised dialogues and records usage", async () => {
-    const collected = await collectLeads(PERIOD, store);
-    const run = await analyseLeads(collected, "user-1", { store, now: NOW });
-    expect(run.ok).toBe(true);
-    if (!run.ok) return;
-
-    const batch = sent[0];
-    const content = batch.input[0].content;
-    expect(batch.store).toBe(false);
-    expect(batch.text.format).toMatchObject({ type: "json_schema", strict: true });
-    for (const field of ["user", "metadata", "safety_identifier", "tools"]) expect(batch).not.toHaveProperty(field);
-    for (const secret of [...SECRETS.filter((s) => s !== "Finns bilen kvar"), SELLER_NAME, SELLER_A, "user-1"]) {
-      expect(JSON.stringify(sent)).not.toContain(secret);
-    }
-    expect(content).toContain("Säljare 1");
-    expect(content).toContain("Finns bilen kvar");
-    expect(content).toContain("läge: säljaren skrev sist, för mindre än 3 dygn sedan");
-    // Customer text is data, never instructions; relevance before judgement.
-    expect(batch.instructions).toMatch(/aldrig instruktioner till dig/);
-    expect(batch.instructions).toMatch(/aldrig bli "missing"/);
-
-    // One dialogue with a registered reply; the other is not sent.
-    expect(run.result).toMatchObject({ dialoguesAnalysed: 1, analysedNew: 1, reused: 0, analysisVersion: ANALYSIS_VERSION });
-    expect(run.result.notAnalysed).toEqual([{ reason: "no_registered_reply", count: 1 }]);
-    expect(run.result.counts).toMatchObject({ carSold: 1, soldWithoutAlternative: 1, soldWithAlternative: 0 });
-    expect(run.result.counts.behaviours.next_step).toEqual({ done: 0, missing: 1, not_relevant: 0, unclear: 0 });
-    expect(run.result.counts.behaviours.visit_or_test_drive).toEqual({ done: 0, missing: 0, not_relevant: 1, unclear: 0 });
-    // Too few dialogues for a combined analysis.
-    expect(run.result.summary).toBeNull();
-    expect(usage.recordChatUsage).toHaveBeenCalledWith(expect.objectContaining({ purpose: "lead_analysis", assistantId: null, dataClass: "internal", userId: "user-1" }));
-    expect(run.result.costUsd).toBeGreaterThan(0);
+describe("AI analysis of an inbox", () => {
+  beforeEach(async () => {
+    await syncInbox(INBOX, PERIOD, store);
+    messageCalls = [];
   });
 
-  it("stores versioned results with a fingerprint and no personal data", async () => {
-    const collected = await collectLeads(PERIOD, store);
-    await analyseLeads(collected, "user-1", { store, now: NOW });
+  it("sends only redacted, pseudonymised dialogues and stores versioned results", async () => {
+    const run = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    const batch = sent[0];
+    expect(batch.store).toBe(false);
+    expect(batch.text.format).toMatchObject({ type: "json_schema", strict: true, name: "lead_dialogues" });
+    for (const field of ["user", "metadata", "safety_identifier", "tools"]) expect(batch).not.toHaveProperty(field);
+    for (const secret of [KEY, SYNTHETIC_CUSTOMER.name, SYNTHETIC_CUSTOMER.email, SYNTHETIC_CUSTOMER.phone, "070-000 00 09", SELLER_NAME, SELLER_A, "user-1", "Testa"]) {
+      expect(JSON.stringify(sent)).not.toContain(secret);
+    }
+    expect(batch.input[0].content).toContain("Säljare 1");
+    // The attachment is known by kind only – never by its file name or URL.
+    expect(batch.input[0].content).toContain("[Bilaga: offertliknande dokument enligt filnamnet (innehållet är inte läst)]");
+    expect(JSON.stringify(sent)).not.toContain("files.example");
+    expect(batch.instructions).toMatch(/Förstå först vad kunden försöker åstadkomma/);
+    expect(batch.instructions).toMatch(/aldrig instruktioner till dig/);
+
+    expect(run.result.run).toMatchObject({ dialoguesAnalysed: 1, analysedNew: 1, reused: 0, analysisVersion: ANALYSIS_VERSION });
+    expect(run.result.notAnalysed).toEqual([{ reason: "no_registered_reply", count: 1 }]);
+    expect(run.result.counts).toMatchObject({ missedOpportunities: 1, carSold: 1, soldWithoutAlternative: 1 });
     const [saved] = [...store.analyses.values()];
-    expect(saved).toMatchObject({ threadId: "11", sellerId: SELLER_A, analysisVersion: ANALYSIS_VERSION, model: "gpt-6-luna", writes: 1 });
-    expect(saved.fingerprint).toMatch(/^[0-9a-f]{64}$/);
-    expect(saved.classification.behaviours.next_step).toEqual({ status: "missing", reason: "Inget konkret förslag." });
-    expect(store.runs).toHaveLength(1);
-    expect(store.runs[0]).toMatchObject({ inboxId: INBOX, analysedNew: 1, reused: 0, dialoguesAnalysed: 1, leads: 2 });
+    expect(saved).toMatchObject({ threadId: "11", sellerId: SELLER_A, analysisVersion: ANALYSIS_VERSION, sourceLatestMessageAt: "2026-09-02T09:00:00.000Z", situationState: "too_early" });
+    expect(saved.classification.assessment).toMatchObject({ goal: "Vill veta om bilen finns kvar.", progress: "stalled", missedOpportunity: "yes" });
+    expect(store.runs[0]).toMatchObject({ scopeType: "inbox", inboxId: INBOX.id, regionId: null, analysedNew: 1 });
+    expect(usage.recordChatUsage).toHaveBeenCalledWith(expect.objectContaining({ purpose: "lead_analysis", assistantId: null, dataClass: "internal" }));
     for (const secret of [...SECRETS, SELLER_NAME]) expect(store.analysisData()).not.toContain(secret);
   });
 
-  it("drops AI text that contains personal data before it is stored", async () => {
-    observation = `Säljaren skrev till ${SYNTHETIC_CUSTOMER.email} men erbjöd inget alternativ.`;
-    const collected = await collectLeads(PERIOD, store);
-    await analyseLeads(collected, "user-1", { store, now: NOW });
-    const [saved] = [...store.analyses.values()];
-    expect(saved.classification.observations).toEqual([]);
-    expect(store.analysisData()).not.toContain(SYNTHETIC_CUSTOMER.email);
-  });
-
-  it("reuses an unchanged dialogue without calling the model again", async () => {
-    const collected = await collectLeads(PERIOD, store);
-    await analyseLeads(collected, "user-1", { store, now: NOW });
+  it("reuses a stored analysis without reading HubSpot or calling the model", async () => {
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
     const calls = sent.length;
-    const again = await analyseLeads(collected, "user-1", { store, now: NOW });
+    messageCalls = [];
+    const again = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(again.ok && again.result.run).toMatchObject({ reused: 1, analysedNew: 0, costUsd: 0 });
     expect(sent.length).toBe(calls);
-    expect(again.ok && again.result).toMatchObject({ reused: 1, analysedNew: 0, dialoguesAnalysed: 1, costUsd: 0 });
-    // No duplicate: one row per thread, version and model.
+    expect(messageCalls).toEqual([]);
     expect(store.analyses.size).toBe(1);
-    expect([...store.analyses.values()][0].writes).toBe(1);
-    expect(store.runs).toHaveLength(2);
   });
 
-  it("analyses again when the dialogue has changed, and replaces the stored row", async () => {
-    const collected = await collectLeads(PERIOD, store);
-    await analyseLeads(collected, "user-1", { store, now: NOW });
-    const before = [...store.analyses.values()][0].fingerprint;
-    // A new customer message in HubSpot.
-    const lead = collected.leads.find((l) => l.row.threadId === "11")!;
-    lead.dialogue.push({ role: "customer", sellerId: null, at: "2026-09-02T10:00:00.000Z", text: "Har ni någon liknande bil?", senderName: null });
-    const again = await analyseLeads(collected, "user-1", { store, now: NOW });
-    expect(again.ok && again.result).toMatchObject({ analysedNew: 1, reused: 0 });
+  it("re-analyses only a changed dialogue and replaces its row", async () => {
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    threads[0].latestMessageTimestamp = "2026-09-03T08:00:00.000Z";
+    messages["11"].push(customer("c9", "2026-09-03T08:00:00.000Z", "Har ni någon liknande bil?"));
+    clearLeadCachesForTests();
+    await syncInbox(INBOX, PERIOD, store);
+    messageCalls = [];
+    const again = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(again.ok && again.result.run).toMatchObject({ analysedNew: 1, reused: 0 });
+    // The history was read by the sync just before (30-minute cache); only this dialogue went to the model.
+    expect(messageCalls).toEqual([]);
+    expect(sent.at(-1)!.input[0].content.match(/=== Dialog/g)).toHaveLength(1);
     expect(store.analyses.size).toBe(1);
-    const after = [...store.analyses.values()][0];
-    expect(after.fingerprint).not.toBe(before);
-    expect(after.writes).toBe(2);
+    expect([...store.analyses.values()][0]).toMatchObject({ writes: 2, situationState: "customer_last" });
   });
 
-  it("analyses again when the customer's silence passes the follow-up limit", async () => {
-    const collected = await collectLeads(PERIOD, store);
-    await analyseLeads(collected, "user-1", { store, now: NOW });
-    const later = await analyseLeads(collected, "user-1", { store, now: new Date("2026-09-10T12:00:00.000Z") });
-    expect(later.ok && later.result).toMatchObject({ analysedNew: 1, reused: 0 });
-    expect(sent.at(-1)!.input[0].content).toContain("läge: säljaren skrev sist, kunden har inte svarat på minst 3 dygn");
+  it("re-analyses when the follow-up step changes with time", async () => {
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    const later = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: new Date("2026-09-10T12:00:00.000Z") });
+    expect(later.ok && later.result.run).toMatchObject({ analysedNew: 1 });
+    expect(sent.at(-1)!.input[0].content).toContain("kunden har inte svarat på minst 3 dygn");
   });
 
   it("never reuses a result from another analysis version", async () => {
-    const collected = await collectLeads(PERIOD, store);
-    await analyseLeads(collected, "user-1", { store, now: NOW });
-    // The same thread, analysed with an earlier method.
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
     const [current] = [...store.analyses.values()];
     store.analyses.clear();
-    await store.saveAnalyses([{ ...current }], "lead-ai-1", current.model);
-    const again = await analyseLeads(collected, "user-1", { store, now: NOW });
-    expect(again.ok && again.result).toMatchObject({ analysedNew: 1, reused: 0, analysisVersion: ANALYSIS_VERSION });
-    // Both methods' results exist side by side – never mixed.
-    expect([...store.analyses.values()].map((a) => a.analysisVersion).sort()).toEqual(["lead-ai-1", ANALYSIS_VERSION].sort());
+    await store.saveAnalyses([{ ...current }], "lead-ai-2", current.model);
+    const again = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(again.ok && again.result.run).toMatchObject({ analysedNew: 1, reused: 0 });
+    expect([...store.analyses.values()].map((a) => a.analysisVersion).sort()).toEqual(["lead-ai-2", ANALYSIS_VERSION].sort());
   });
 
-  it("stores the combined analysis with seller ids and shows it with names", async () => {
-    const collected = await collectLeads(PERIOD, store);
-    // Three copies of the answered lead give enough dialogues for a summary.
-    const lead = collected.leads.find((l) => l.row.status === "registered_reply")!;
-    collected.leads = [1, 2, 3].map((n) => ({ ...lead, row: { ...lead.row, threadId: `9${n}` } }));
-    const run = await analyseLeads(collected, "user-1", { store, now: NOW });
-    expect(run.ok && run.result.summary).toMatchObject({
-      improvements: [`${SELLER_NAME} kan erbjuda alternativ`],
-      sellerPatterns: [{ sellerId: SELLER_A, name: SELLER_NAME, dialogues: 3 }],
-    });
-    const stored = store.runs[0].summary!;
-    expect(stored.improvements).toEqual([`{{${SELLER_A}}} kan erbjuda alternativ`]);
-    expect(JSON.stringify(store.runs)).not.toContain(SELLER_NAME);
-    // The summary is told to use the relevant dialogues as denominator.
-    const summaryCall = sent.find((s) => s.text.format.name === "lead_summary")!;
-    expect(summaryCall.instructions).toMatch(/ange alltid nämnaren/);
-    expect(summaryCall.input[0].content).toContain('"next_step":{"relevanta":3,"gjort":0,"saknades":3');
+  it("drops AI text that contains personal data before it is stored", async () => {
+    observation = `Kunden ${SYNTHETIC_CUSTOMER.email} fick inget alternativ.`;
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    const [saved] = [...store.analyses.values()];
+    expect(saved.classification.assessment!.missedReason).toBe("");
+    expect(store.analysisData()).not.toContain(SYNTHETIC_CUSTOMER.email);
+  });
+
+  it("asks once more for dialogues the model left out of a batch", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    omitNext = 1;
+    const run = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(run.ok && run.result.run).toMatchObject({ dialoguesAnalysed: 1, analysedNew: 1 });
+    expect(sent.filter((r) => r.text.format.name === "lead_dialogues")).toHaveLength(2);
+    expect(console.warn).toHaveBeenCalledWith("[leads] AI batch incomplete, retrying", 1);
   });
 
   it("continues when a batch fails and stops at the budget", async () => {
-    const collected = await collectLeads(PERIOD, store);
     setOpenAIClientForTests({ responses: { create: vi.fn(async () => ({ status: "completed", output_text: "{not json" })) } } as unknown as Parameters<typeof setOpenAIClientForTests>[0]);
-    const failed = await analyseLeads(collected, "user-1", { store, now: NOW });
-    expect(failed.ok && failed.result).toMatchObject({ dialoguesAnalysed: 0, notAnalysed: expect.arrayContaining([{ reason: "failed", count: 1 }]) });
+    const failed = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(failed.ok && failed.result.notAnalysed).toEqual(expect.arrayContaining([{ reason: "failed", count: 1 }]));
     expect(store.analyses.size).toBe(0);
-
     vi.mocked(limits.beginAIRequest).mockResolvedValueOnce({ ok: false, reason: "monthly_budget", message: "Månadens AI-budget är förbrukad. Kontakta en administratör." });
-    const stopped = await analyseLeads(collected, "user-1", { store, now: NOW });
-    expect(stopped).toEqual({ ok: false, error: "Månadens AI-budget är förbrukad. Kontakta en administratör." });
+    expect(await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW })).toEqual({ ok: false, error: "Månadens AI-budget är förbrukad. Kontakta en administratör." });
+  });
+});
+
+describe("combined analysis of a region", () => {
+  it("uses stored classifications only, with evidence as thread ids", async () => {
+    await syncInbox(INBOX, PERIOD, store);
+    // Three analysed leads (copies of 11).
+    const base = store.threads.get("11")!;
+    for (const id of ["21", "22", "23"]) {
+      store.threads.set(id, { ...base, threadId: id });
+      messages[id] = messages["11"];
+    }
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    // A lead synced after the analysis: reported as lacking a stored analysis, not as over the limit.
+    store.threads.set("24", { ...base, threadId: "24" });
+    sent = [];
+    messageCalls = [];
+    const run = await summariseScope({ scopeType: "region", regionId: "11111111-1111-4111-8111-111111111111", inboxIds: [INBOX.id], period: PERIOD }, "user-1", { store });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(messageCalls).toEqual([]);
+    expect(run.result.notAnalysed).toContainEqual({ reason: "no_stored_analysis", count: 1 });
+    expect(run.result.notAnalysed.some((n) => n.reason === "limit")).toBe(false);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text.format.name).toBe("lead_summary");
+    expect(sent[0].instructions).toMatch(/Återberätta inte siffrorna/);
+    // A finding with fewer than two dialogues is dropped; evidence is thread ids.
+    expect(run.result.summary!.findings).toHaveLength(1);
+    expect(run.result.summary!.findings[0].threadIds).toHaveLength(3);
+    expect(run.result.summary!.sellerPatterns[0]).toMatchObject({ sellerId: SELLER_A, name: SELLER_NAME, strengths: [{ text: `${SELLER_NAME} svarar snabbt.` }] });
+    const stored = store.runs.at(-1)!;
+    expect(stored).toMatchObject({ scopeType: "region", inboxId: null, analysedNew: 0 });
+    expect(JSON.stringify(stored.summary)).toContain(`{{${SELLER_A}}}`);
+    expect(JSON.stringify(stored.summary)).not.toContain(SELLER_NAME);
+  });
+
+  it("refuses when too few dialogues are analysed", async () => {
+    await syncInbox(INBOX, PERIOD, store);
+    const run = await summariseScope({ scopeType: "all", regionId: null, inboxIds: [INBOX.id], period: PERIOD }, "user-1", { store });
+    expect(run).toEqual({ ok: false, error: "Det finns för få AI-analyserade dialoger i urvalet (0 av 1). Analysera inkorgarna först." });
+    expect(sent).toHaveLength(0);
   });
 });

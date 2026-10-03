@@ -1,4 +1,4 @@
-import { House, Library, Settings, ShieldCheck, SquarePen } from "lucide-react";
+import { ChartColumn, House, Library, Settings, ShieldCheck, SquarePen } from "lucide-react";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { canSeeAdministration } from "@/lib/domain/roles";
@@ -14,10 +14,13 @@ export function WorkspaceSidebar({
   user,
   assistants,
   recent,
+  leadAnalysis = false,
 }: {
   user: User;
   assistants: Assistant[];
   recent: ConversationSummary[];
+  /** The user has access to the lead analysis (checked on the server; ADR-048). */
+  leadAnalysis?: boolean;
 }) {
   return (
     <>
@@ -36,6 +39,12 @@ export function WorkspaceSidebar({
             <Library />
             Kunskapsbank
           </SidebarNavLink>
+          {leadAnalysis && (
+            <SidebarNavLink href="/leads">
+              <ChartColumn />
+              Leadanalys
+            </SidebarNavLink>
+          )}
           {canSeeAdministration(user.role) && (
             <SidebarNavLink href="/admin">
               <ShieldCheck />

@@ -37,7 +37,10 @@ export type SecurityEvent =
   | "ai.document_revoked"
   | "ai.instructions_changed"
   | "leads.report_generated"
-  | "leads.ai_analysis_run";
+  | "leads.ai_analysis_run"
+  | "leads.synced"
+  | "leads.config_changed"
+  | "leads.access_changed";
 
 export async function logSecurityEvent(
   action: SecurityEvent,

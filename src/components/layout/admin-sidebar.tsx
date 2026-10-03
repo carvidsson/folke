@@ -82,10 +82,10 @@ export function AdminSidebar({ user, leadAnalysis = false }: { user: User; leadA
           </SidebarSection>
         )}
         {isAdmin && leadAnalysis && (
-          <SidebarSection title="Experiment">
+          <SidebarSection title="Leadanalys">
             <SidebarNavLink href="/admin/leads">
               <MessagesSquare />
-              Leadanalys
+              Inkorgar och åtkomst
             </SidebarNavLink>
           </SidebarSection>
         )}

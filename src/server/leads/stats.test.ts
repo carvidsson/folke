@@ -26,6 +26,15 @@ function row(partial: Partial<LeadRow>): LeadRow {
     sellerMessages: 1,
     internalComments: 0,
     customerWroteLast: false,
+    inboxId: "900001",
+    latestMessageAt: null,
+    lastCustomerMessageAt: null,
+    firstSellerAfterCustomerAt: null,
+    followedUp: false,
+    vehicleBrand: null,
+    vehicleModel: null,
+    vehicleSource: null,
+    regnrKind: null,
     ...partial,
   };
 }
