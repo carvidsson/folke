@@ -49,6 +49,8 @@ const ACTION_LABELS: Record<string, [string, StatusTone]> = {
   "ai.document_approved": ["Dokument godkänt för OpenAI", "warning"],
   "ai.document_revoked": ["Godkännande för OpenAI återkallat", "info"],
   "ai.instructions_changed": ["AI-instruktioner ändrade", "info"],
+  "leads.report_generated": ["Leadanalys hämtad från HubSpot", "info"],
+  "leads.ai_analysis_run": ["Leaddialoger analyserade med AI", "warning"],
   "conversations.purge": ["Gallring av konversationer", "warning"],
 };
 

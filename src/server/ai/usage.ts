@@ -6,7 +6,7 @@ import { chatCostUsd, embeddingCostUsd, usdToSek } from "./pricing";
 import type { UsageReport } from "./types";
 
 /** What a call was for (ai_usage.purpose). */
-export type UsagePurpose = "conversation" | "indexing" | "instruction_test" | "attachment_indexing";
+export type UsagePurpose = "conversation" | "indexing" | "instruction_test" | "attachment_indexing" | "lead_analysis";
 
 /**
  * Records token usage and estimated cost (service role, after the caller's
@@ -14,7 +14,8 @@ export type UsagePurpose = "conversation" | "indexing" | "instruction_test" | "a
  */
 export async function recordChatUsage(input: {
   userId: string;
-  assistantId: string;
+  /** null for lead analysis (no assistant is involved). */
+  assistantId: string | null;
   /** null for instruction tests (no conversation is stored). */
   conversationId: string | null;
   provider: string;

@@ -67,6 +67,15 @@ export function attachmentsExternalAllowed(): boolean {
   return attachmentsEnabled() && externalProviderConfigured();
 }
 
+/**
+ * Experimental lead analysis (ADR-046): redacted, pseudonymised HubSpot
+ * dialogues may be classified by OpenAI only when FOLKE_LEAD_ANALYSIS_AI
+ * is "on" – an explicit decision separate from the chat's data policy.
+ */
+export function leadAnalysisExternalAllowed(): boolean {
+  return serverEnv().FOLKE_LEAD_ANALYSIS_AI === "on" && externalProviderConfigured();
+}
+
 /** Which provider a chat turn may use. Anything not explicitly allowed is mock. */
 export function chooseProviderId({ conversationClass, userHasTestAccess }: RoutingInput): "mock" | "openai" {
   if (!externalProviderConfigured()) return "mock";

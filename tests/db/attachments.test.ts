@@ -290,4 +290,21 @@ describe("storage and cost tracking", () => {
       db.query(`insert into public.ai_usage (user_id, provider, model, purpose) values ($1, 'openai', $2, 'annat')`, [U.seller, MODEL]),
     ).rejects.toThrow();
   });
+
+  it("records lead analysis as its own purpose, without an assistant (ADR-046)", async () => {
+    await asService(db, async (tx) => {
+      await tx.query(
+        `insert into public.ai_usage (user_id, assistant_id, provider, model, purpose, data_class) values ($1, null, 'openai', $2, 'lead_analysis', 'internal')`,
+        [U.admin, MODEL],
+      );
+    });
+    // Ordinary users can neither write usage nor see an administrator's.
+    await expect(
+      asUser(db, U.seller, (tx) =>
+        tx.query(`insert into public.ai_usage (user_id, provider, model, purpose) values ($1, 'openai', $2, 'lead_analysis')`, [U.seller, MODEL]),
+      ),
+    ).rejects.toThrow();
+    const seen = await asUser(db, U.seller, (tx) => tx.query(`select 1 from public.ai_usage where purpose = 'lead_analysis'`));
+    expect(seen.rows).toHaveLength(0);
+  });
 });

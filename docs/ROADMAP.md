@@ -114,6 +114,21 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Betan | ✅ Aktiverad 2026-10-02 med informationstext. Avtalsfrågorna ska lösas innan fler användare bjuds in. |
 | Schemalagd städning (Vercel Cron) | Senare. Kön är förberedd. |
 
+## Leadanalys från HubSpot (ADR-046, ADR-047) – experiment
+
+| Del | Status |
+|---|---|
+| Read-only-klient för HubSpot Conversations (`conversations.read`), verifierad mot riktiga API-svar | ✅ |
+| Fakta: källa, ankomsttid, första registrerade säljsvar (kalender- och kontorstid), inget registrerat säljsvar i HubSpot, kunden skrev sist, ägare och första svarare, per säljare | ✅ |
+| Avidentifiering, pseudonymer, AI-klassificering per dialog och sammanvägd analys | ✅ Bakom `FOLKE_LEAD_ANALYSIS_AI` |
+| Relevansmodell (gjort / saknades / inte relevant / går inte att avgöra), validerad mot riktiga dialoger | ✅ ADR-047 |
+| Beständig analysdata, versionering och source fingerprint, historik per månad och körning | ✅ ADR-047 |
+| Migrationer `20261009090000`, `20261010090000`, `20261010100000` | ✅ folke-dev och folke (2026-10-03) |
+| Svenska helgdagar i kontorstiden | Senare |
+| Jämförelse av perioder och per säljare över tid i gränssnittet | Senare. Datat finns och går att aggregera. |
+| Gallring av analysdata | Senare. Beslut om lagringstid behövs. |
+| Betan | ✅ Releasad 2026-10-03. Sidan visas när `HUBSPOT_SERVICE_KEY` finns i Vercel; AI-analysen kräver dessutom `FOLKE_LEAD_ANALYSIS_AI=on`. |
+
 ## Senare
 
 - **Versionshistorik:** bevara publicerarens namn även när användarkontot tas bort (i dag blir det "Folke"). Mindre förbättring som inte ska försena introduktionen.

@@ -35,7 +35,9 @@ export type SecurityEvent =
   | "ai.embeddings_indexed"
   | "ai.document_approved"
   | "ai.document_revoked"
-  | "ai.instructions_changed";
+  | "ai.instructions_changed"
+  | "leads.report_generated"
+  | "leads.ai_analysis_run";
 
 export async function logSecurityEvent(
   action: SecurityEvent,

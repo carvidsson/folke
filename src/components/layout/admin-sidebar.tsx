@@ -4,6 +4,7 @@ import {
   Bot,
   Gauge,
   KeyRound,
+  MessagesSquare,
   NotebookPen,
   ScrollText,
   Sparkles,
@@ -18,8 +19,11 @@ import { SidebarBody, SidebarHeader, SidebarSection } from "./sidebar";
 import { SidebarFooterUser } from "./sidebar-footer-user";
 import { SidebarNavLink, sidebarItemClass } from "./sidebar-nav-link";
 
-/** Sidebar for the administration area. Items follow the user's role. */
-export function AdminSidebar({ user }: { user: User }) {
+/**
+ * Sidebar for the administration area. Items follow the user's role;
+ * `leadAnalysis` shows the experimental lead analysis (ADR-046).
+ */
+export function AdminSidebar({ user, leadAnalysis = false }: { user: User; leadAnalysis?: boolean }) {
   const isAdmin = user.role === "system_admin";
   return (
     <>
@@ -74,6 +78,14 @@ export function AdminSidebar({ user }: { user: User }) {
             <SidebarNavLink href="/admin/retention">
               <Archive />
               Gallring
+            </SidebarNavLink>
+          </SidebarSection>
+        )}
+        {isAdmin && leadAnalysis && (
+          <SidebarSection title="Experiment">
+            <SidebarNavLink href="/admin/leads">
+              <MessagesSquare />
+              Leadanalys
             </SidebarNavLink>
           </SidebarSection>
         )}

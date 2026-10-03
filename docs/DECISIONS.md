@@ -329,6 +329,105 @@ Korta beslutsposter i ADR-stil. Nya beslut läggs till sist. Ett beslut som änd
 
 **Mätning (`tests/ai-eval/attachments.eval.ts`, syntetiska filer, gpt-6-luna, tre körningar):** 15 av 15 kvalitetskontroller i 3 av 3 körningar, och alla hårda kontroller var godkända. I snitt cirka 3 600 tokens in, och en skärmdump i 1280×720 kostar cirka 1 100 tokens. Svarstiden var cirka 2 s, och kostnaden cirka 0,0001 USD per svar.
 
+### ADR-046 – Leadanalys från HubSpot Conversations (experiment)
+
+**Sammanhang:** Produktägaren vill se hur leads i en HubSpot-inkorg tas emot och besvaras: källa, ankomsttid, första svar, leads utan svar och mönster per säljare, samt en kvalitativ läsning av dialogerna. Det ska inte finnas någon poängsättning eller ranking. Experimentet görs bara i folke-dev, och HubSpot används strikt read-only.
+
+**Verifierat mot riktiga API-svar (Alingsås Volkswagen PB, 30 dagar, maskerad utskrift):**
+- Inkorgar hittas via `GET /inboxes` och identifieras med namn i gränssnittet. Inget id är hårdkodat.
+- `GET /threads` kan **bara** filtrera på senaste meddelandet (`latestMessageTimestampAfter`), inte på `createdAt`. Folke hämtar därför alla trådar med aktivitet sedan periodens start och väljer själv de som skapades i perioden. Det är fullständigt, eftersom en tråd som skapats i perioden alltid har sitt senaste meddelande därefter. Sidor hämtas med `paging.next.after`, 100 per sida.
+- Historiken (`/threads/{id}/messages`, nyaste först) blandar `MESSAGE` med systemhändelser (`ASSIGNMENT`, `THREAD_STATUS_CHANGE`, `THREAD_INBOX_CHANGE`) och interna `COMMENT`. Inga botar, välkomstmeddelanden eller automatiska svar förekom.
+- Ett mänskligt säljarsvar är `MESSAGE` + `OUTGOING` från en agent (`A-…`), skapat av samma agent, via `HUBSPOT` och med status `SENT`. Allt annat utgående klassas som osäkert, och då räknas ingen svarstid.
+- `assignedTo` är den **nuvarande** ägaren. Den som svarar blir ägare automatiskt (tilldelningen loggas millisekunder efter svaret), så ägare och första svarare sammanföll i alla 94 besvarade trådar. Jämförelsen visas ändå.
+- Formulärfälten ligger som `Etikett: värde`-rader i första meddelandets `text`, i tre format: annonsleads (Blocket/Wayke), hemsidan och provkörningsformuläret. I annonsleads är `Registreringsnummer` nästan alltid `Virtuell`, `Modell` `-` och `Mätarställning` `0`. Bilen läses därför ut från ämnesraden.
+- Gränser enligt svarshuvudena: 19 anrop/s, 190 per 10 s och 1 miljon per dygn.
+
+**Beslut:**
+- **Tre skilda lager**, både i kod och gränssnitt: fakta som räknas fram ur HubSpot-data (`stats.ts`), AI-klassificering per dialog (`analysis.ts`) och AI:s sammanvägda analys. Ingen totalpoäng, inga skalor och ingen topplista. Säljare sorteras efter namn, och vid färre än 5 första svar visas "för litet underlag".
+- **Svar:** första mänskliga säljarsvar enligt ovan. Kalendertid och kontorstid (måndag–fredag 09–18, Europe/Stockholm, sommartid via IANA, inga helgdagar) räknas båda. "Inget svar i HubSpot" används i stället för "obesvarad", eftersom telefonkontakt inte syns.
+- **Parsern** känner bara igen kända etiketter. Platshållare och felaktiga format ger `null`, och parsern hittar aldrig på ett värde.
+- **Ingen lagring av HubSpot-data:** historik och klassificeringar ligger bara i minnet med utgångstid. Nyckeln innehåller trådens senaste meddelande, så en oförändrad tråd analyseras inte igen.
+- **AI bakom egen flagga:** `FOLKE_LEAD_ANALYSIS_AI` (standard `off`) avgörs av `leadAnalysisExternalAllowed()`. Den är skild från chattens dataregler, eftersom det här är verklig kunddata, om än avidentifierad.
+  - Bara besvarade dialoger skickas, högst 150 per körning, i grupper om 6 med `gpt-6-luna` på `low`.
+  - Svaren använder Structured Outputs och valideras med zod.
+  - "Missad möjlighet" (bilen såld eller reserverad utan erbjudet alternativ) räknas fram med en regel ur klassificeringen.
+- **Avidentifiering** före varje anrop, en andra kontroll som stoppar dialoger som fortfarande innehåller kända värden, och pseudonymer för säljare som översätts tillbaka på servern. Registreringsnummer skickas aldrig, eftersom de inte behövs för analysen.
+
+- **Lärdom från riktiga data:** HubSpots avsändarnamn på utgående mejl är "<säljare> <brevlådans namn>". Det ersätts därför som helhet, och namndelar tas bara från säljarens eget namn (actors-API:t). Vanliga affärsord som "Bil" och "Börjessons" räknas aldrig som namndelar.
+  - Med den regeln klarar 85 av 85 riktiga dialoger kontrollen. Före regeln stoppades 75.
+  - Ett skyddsnät på körningsnivå ersätter sällsynta versalord mitt i en mening med `[namn]`. Det gäller ord som inte är affärsord, aldrig förekommer med gemener och bara finns i en dialog. Det fångar namn som formuläret inte känner till.
+  - Kontrollerat i en torrkörning utan AI-anrop: inget känt kundvärde (namn, e-post eller telefon från någon av periodens leads) och ingen säljarnamnsdel fanns kvar.
+
+**Konsekvenser:** Migrationen `20261009090000_lead_analysis_usage.sql` lägger till `lead_analysis` som syfte i `ai_usage`. Den är bara körd i folke-dev, och den måste köras i folke innan funktionen kan aktiveras där. En körning läser varje tråd en gång (≈ 115 anrop för 30 dagar i testinkorgen, cirka 15 s).
+
+**Mätning (webbläsartest 2026-10-03, Alingsås Volkswagen PB, 3 sep–2 okt):**
+- 100 leads, varav 84 dialoger analyserade med gpt-6-luna på 81 s, i 15 anrop.
+- Cirka 65 000 tokens in och 20 000 ut, totalt 0,017 USD.
+- En omkörning tog alla 84 klassificeringar från minnet. Bara den sammanvägda analysen gjordes om (≈ 0,001 USD).
+
+*Ersatt i delar av ADR-047: minnescachen för klassificeringar är ersatt av beständig lagring, och definitionerna och modellinställningen är ändrade.*
+
+### ADR-047 – Leadanalys: relevansmodell, beständig analysdata och versionering
+
+**Sammanhang:** I ADR-046 fanns resultaten bara i serverns minne, och en räkning som "bjöd in till besök: 6 ja / 78 nej" kunde kritisera säljare för något som inte var relevant. Historiken behövs för att följa utvecklingen över tid per inkorg och säljare. HubSpot ska fortsatt vara källan till dialogerna.
+
+**Beslut:**
+- **Formuleringar efter vad HubSpot visar:** "Registrerat säljsvar i HubSpot" och "Inget registrerat säljsvar i HubSpot", aldrig "besvarad" eller "obesvarad". Nytt deterministiskt faktum: **"Kunden skrev sist"** – leads med registrerat säljsvar där kunden skrev det sista meddelandet och inget senare säljsvar finns registrerat (31 av 84 i testinkorgen), med förbehållet att svaret kan ha gått utanför HubSpot.
+- **Nämnare överallt:** alla andelar visas som "X av N (P %)" med populationen utskriven: alla leads, leads med registrerat säljsvar, AI-analyserade dialoger eller dialoger där ett beteende var relevant. Svarstiderna gäller alltid leads med registrerat säljsvar.
+- **Relevansmodell:** varje beteende bedöms som `done` (relevant och gjort), `missing` (relevant men inte gjort), `not_relevant` eller `unclear` (går inte att avgöra).
+  - "Missing" kräver att säljaren hade ett tillfälle, det vill säga skrev ett meddelande efter det som behövde göras.
+  - Sidan visar "Relevant i 18 av 84 analyserade dialoger. Gjort i 6 och saknades i 12". En andel visas bara vid minst 5 relevanta.
+- **Beteenden och definitioner:**
+  - *Besvarade kundens konkreta frågor:* bara frågor som följs av ett säljarmeddelande räknas. Svar i en skickad offert räknas, liksom att be om de uppgifter offerten kräver. Slutar dialogen med kundens fråga, eller med ett säljarmeddelande utan text (troligen en bilaga), blir resultatet "unclear".
+  - *Lämnade ett konkret nästa steg:* bedöms på säljarens senaste meddelanden (en tid, en offert eller kalkyl, en fråga om det som behövs). Kunden skrev sist ger aldrig "missing" (regel i koden).
+  - *Frågade efter det som behövs för ett rätt erbjudande.*
+  - *Bjöd in till besök eller provkörning:* bara relevant när kunden vill se eller provköra, är osäker på modell eller gäller en viss begagnad bil – aldrig vid pris- och villkorsfrågor om en vald bil.
+  - *Följde upp när kunden inte svarade:* tystnaden på minst 3 dygn och om säljaren skrev igen minst ett dygn senare **räknas ut ur HubSpot** och skriver över modellens svar. Modellen avgör bara om meddelandet väntade på svar.
+  - Borttaget: *Svarade på kundens ärende* (gjort i 83 av 84 – säger ingenting).
+  - Kvar som klassning: ärende, köpintention, såld eller reserverad bil och om ett alternativ erbjöds.
+- **Modell:** gpt-6-luna med `reasoning: medium` för leadanalysen (`LEAD_REASONING`). Analysen körs med 5 parallella batcher, en tidsgräns per anrop på 150 s och en tidsbudget på 200 s per körning. Dialoger som inte hinner analyseras redovisas och tas med vid nästa körning. Sidan har `maxDuration = 300`.
+- **Beständig analysdata** (migrationerna `20261010090000_lead_analysis_store.sql` och `20261010100000_lead_customer_wrote_last.sql`):
+  - `lead_inboxes`, `lead_sellers` (HubSpot-id `A-…` som stabil identitet, namnet uppdateras)
+  - `lead_threads` (fakta per lead, upsert per tråd)
+  - `lead_dialogue_analyses` (en rad per tråd × `analysis_version` × modell)
+  - `lead_analysis_runs` (period, version, modell, antal nya och återanvända, kostnad, faktasammanfattning och sammanvägd analys; säljare som `{{A-…}}`, aldrig namn)
+  - Inga meddelandetexter eller kunduppgifter sparas. AI:s egen text kontrolleras innan den sparas.
+  - RLS: bara systemadministratörer, bara via egen session. Användare kan inte ta bort historik.
+- **Versionering och source fingerprint:**
+  - `ANALYSIS_VERSION` (`lead-ai-2`) beskriver metoden: prompt, schema, definitioner, avidentifiering och resonemangsnivå.
+  - `source_fingerprint` är SHA-256 av metodversion, dialogen så som HubSpot har den, leadets sammanhang och uppföljningsläget i grova steg.
+  - Ett sparat resultat återanvänds bara när version, modell och fingerprint är lika. Annars analyseras dialogen om och raden ersätts.
+  - En ny version ger nya rader bredvid de gamla, så att resultat från olika metoder aldrig blandas.
+  - `FACTS_VERSION` versionerar reglerna för fakta.
+
+**Validering mot riktiga, avidentifierade dialoger (Alingsås Volkswagen PB, 3 sep–2 okt, 84 dialoger):**
+- **Metod:** fyra rundor. Varje runda klassades med gpt-6-luna och, som andra bedömare, gpt-6.1-sol. Därefter manuell läsning av ett varierat urval: pris, leasing, inbyte, köpintention, besök, såld bil, bra och saknat nästa steg, samt enkla frågor där behovsanalys och provkörning inte var relevanta. 46 manuellt bedömda beslut ingick, med betoning på de svåra och omstridda fallen.
+- **Resultat:**
+
+| | Rätt |
+|---|---|
+| Runda 1 (före ändringarna) | Inte mätt, men tydliga fel: besök efterfrågades vid ren pris- och leasingfrågor; "obesvarad" när svaret låg i en offert eller samtalet gick utanför HubSpot |
+| Luna low efter nya definitioner | 31 av 38 |
+| Sol low | 31 av 38 |
+| **Luna medium, slutliga definitioner** | **43 av 46 (93 %)**, besvarade frågor 17 av 17 |
+
+- **Kvarvarande fel:**
+  - Behovsfrågor är den osäkraste bedömningen. Ungefär 6 av 9 "saknades" var rätt i en stickprovskontroll.
+  - Enstaka gränsfall finns för nästa steg och besök.
+  - Ingen dialog med såld bil utan alternativ fanns i perioden, så den klassningen är inte validerad för missade fall.
+- **Fynd som är rättade:**
+  - tre luckor i avidentifieringen (se SECURITY.md)
+  - säljarmeddelanden som bara fanns i `richText` lästes tomma
+  - långa dialoger tappade de senaste meddelandena (nu behålls början och slutet)
+
+**Kostnad (webbläsartest 2026-10-03, samma inkorg och period):**
+
+| Körning | Kostnad | Anrop | Tid |
+|---|---|---|---|
+| Första 30-dagarsanalysen, 84 dialoger | 0,030 USD | 15 | 148 s |
+| Omkörning utan ändringar, 84 återanvända | 0,0006 USD | 1 (bara sammanvägningen) | 12 s |
+| 5 ändrade dialoger | 0,0033 USD | 2 | 45 s |
+
 ---
 
 ## Öppna beslut

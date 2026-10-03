@@ -12,3 +12,6 @@ for (const [key, value] of Object.entries(defaults)) process.env[key] = value;
 // Never use a real AI key in unit tests.
 delete process.env.OPENAI_API_KEY;
 process.env.FOLKE_AI_PROVIDER = "mock";
+// Never call HubSpot from unit tests: the client tests inject a fake fetch.
+delete process.env.HUBSPOT_SERVICE_KEY;
+process.env.FOLKE_LEAD_ANALYSIS_AI = "off";

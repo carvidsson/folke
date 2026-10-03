@@ -344,6 +344,13 @@ Under **Administration → AI och modeller → Modell per assistent** väljer du
 - Resonemangsnivå: `low` för alla assistenter, satt i modellkatalogen (`src/server/ai/models.ts`). Den valfria variabeln `FOLKE_AI_REASONING_EFFORT` (`low` eller `medium`) skriver över nivån för alla assistenter. Den används för att utvärdera `medium` i folke-dev utan kodändring (ADR-044).
 - Konversationsbilagor: `FOLKE_AI_ATTACHMENTS` (`off` som standard, `on` för att slå på). När den är på kan användare bifoga dokument och bilder i chatten, och innehållet skickas till OpenAI när svaret tas fram. Betan har `on` sedan 2026-10-02, med en informationstext vid bilagefunktionen. Avtalsfrågorna i SECURITY.md ska lösas innan fler användare bjuds in (ADR-045). Test: `node --env-file=.env.local node_modules/vitest/vitest.mjs run --config vitest.eval.config.mts tests/ai-eval/attachments.eval.ts` (sätter `on` bara för testprocessen).
 - Budgeten i OpenAI-projektet är ett extra skydd men **ingen garanterad hård gräns**. Kontrollera också användningen i OpenAI-dashboarden.
+- Leadanalys (experiment, ADR-046 och ADR-047):
+  - `HUBSPOT_SERVICE_KEY` är en servicenyckel i HubSpot med **bara** behörigheten `conversations.read`. Lägg in den själv i `.env.local`. När den saknas döljs sidan **Administration → Leadanalys**.
+  - `FOLKE_LEAD_ANALYSIS_AI` är `off` som standard, vilket ger bara statistik. Med `on` får avidentifierade och pseudonymiserade dialoger klassas av OpenAI. Det kräver också `FOLKE_AI_PROVIDER=openai`.
+  - Kostnaden loggas som `lead_analysis` i `ai_usage`.
+  - Migrationer: `20261009090000_lead_analysis_usage.sql`, `20261010090000_lead_analysis_store.sql` och `20261010100000_lead_customer_wrote_last.sql`. Alla tre är körda i folke-dev och i folke (2026-10-03).
+  - Strukturerad analysdata sparas i `lead_*`-tabellerna, aldrig meddelandetexter eller kunduppgifter (ADR-047).
+  - Validering mot riktiga data (läsrättighet, AI med avidentifierade dialoger, kostar några cent): se ADR-047. Skripten används bara lokalt och checkas inte in.
 
 ### Testa
 

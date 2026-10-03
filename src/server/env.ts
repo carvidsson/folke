@@ -72,6 +72,19 @@ const schema = z.object({
   FOLKE_AI_ATTACHMENTS: z.enum(["off", "on"]).default("off"),
   /** Conversion for the SEK column in usage reports (an estimate). */
   FOLKE_USD_TO_SEK: number(10.5),
+
+  /**
+   * Experimental lead analysis (ADR-046). A HubSpot service key with only
+   * the conversations.read scope. Server-side only: never logged, never
+   * sent to the browser or to an AI provider. Unset: the feature is hidden.
+   */
+  HUBSPOT_SERVICE_KEY: optional(),
+  /**
+   * "off" (default): deterministic statistics only. "on": redacted,
+   * pseudonymised dialogues may be classified by OpenAI (requires
+   * FOLKE_AI_PROVIDER=openai). Never enabled in the pilot without approval.
+   */
+  FOLKE_LEAD_ANALYSIS_AI: z.enum(["off", "on"]).default("off"),
 });
 
 export type ServerEnv = z.infer<typeof schema>;
