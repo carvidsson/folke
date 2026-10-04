@@ -9,14 +9,20 @@ import { cn } from "@/lib/utils";
  * Renders assistant answers. Raw HTML is not rendered (react-markdown's
  * default), so model output cannot inject markup.
  *
- * Citation markers like "[2]" are turned into links to "#cite-<idPrefix>-2"
- * (the matching entry in <Sources>) and rendered as small citation badges.
+ * Citation markers like "[2]" or "[1, 2]" are turned into links to
+ * "#cite-<idPrefix>-2" (the matching entry in <Sources>) and rendered as small
+ * citation badges.
  */
 
-const CITATION = /\[(\d{1,2})\](?!\()/g;
+const CITATION = /\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\](?!\()/g;
 
-function linkCitations(markdown: string, idPrefix: string) {
-  return markdown.replace(CITATION, `[$1](#cite-${idPrefix}-$1)`);
+export function linkCitations(markdown: string, idPrefix: string) {
+  return markdown.replace(CITATION, (_match, list: string) =>
+    list
+      .split(",")
+      .map((n) => `[${n.trim()}](#cite-${idPrefix}-${n.trim()})`)
+      .join(" "),
+  );
 }
 
 const components: Components = {

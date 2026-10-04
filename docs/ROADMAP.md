@@ -139,6 +139,22 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Gallring av analysdata | Senare. Beslut om lagringstid behövs. |
 | Betan | ✅ Releasad 2026-10-03. Sidan visas när `HUBSPOT_SERVICE_KEY` finns i Vercel; AI-analysen kräver dessutom `FOLKE_LEAD_ANALYSIS_AI=on`. |
 
+## Leadanalys i chatten V1 (ADR-050) – i folke-dev, granskas
+
+| Del | Status |
+|---|---|
+| Assistenten Leadanalys, dataklassen `lead`, leadåtkomst per fråga, `FOLKE_LEAD_CHAT_AI` | ✅ folke-dev |
+| Deterministisk tolkning: fråga, urval, period, följdfrågor, vidgning, motfrågor, frågor utanför underlaget | ✅ |
+| Modulärt underlag med populationer, deterministiska exempel och jämförelse vid vidgning | ✅ |
+| Leadkällor med [n], Visa alla N, Underlag och Öppna original i HubSpot | ✅ |
+| Pseudonymisering av säljare, även under strömningen | ✅ |
+| Fråga Folke på Leadanalys-sidan (urval och per säljare) | ✅ |
+| Verifierade fakta mellan turerna, mönster → underlag på servern | ✅ |
+| Saknat underlag: Uppdatera från HubSpot / Analysera dialogerna direkt i chatten | ✅ |
+| Migration `20261014090000` | folke-dev. Inte folke – väntar på godkännande. |
+| Betan | Inte släppt – väntar på granskning. |
+| Senare | Fler frågetyper (bilar och märken, inflöde per veckodag), per säljare över tid och utvärdering mot fler formuleringar. |
+
 ## Senare
 
 - **Versionshistorik:** bevara publicerarens namn även när användarkontot tas bort (i dag blir det "Folke"). Mindre förbättring som inte ska försena introduktionen.

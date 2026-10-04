@@ -1,4 +1,5 @@
 import { chatRequestSchema, type ChatStreamEvent } from "@/lib/chat/protocol";
+import { isDocumentSource } from "@/lib/domain/types";
 import { getAIProvider } from "@/server/ai";
 import { verifyCitations } from "@/server/ai/citations";
 import { embedQuery } from "@/server/ai/embeddings";
@@ -32,6 +33,7 @@ import { retrieveContext } from "@/server/chat/retrieval";
 import { citedSources, filterHistory, type HistoryRow } from "@/server/chat/turn";
 import { getInstructionsForAuthorizedChat, getMyAssistant } from "@/server/data/assistants";
 import { getMyAIPreferences, getOrganizationInstructionsForChat } from "@/server/data/instructions";
+import { handleLeadChat } from "@/server/lead-chat/handler";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
 /**
@@ -49,6 +51,9 @@ import { createSupabaseServerClient } from "@/server/supabase/server";
  */
 
 const HISTORY_ROWS = 30;
+
+/** Document assistants never have lead conversations (insert policy, ADR-050). */
+type DocumentConversationClass = Exclude<ConversationDataClass, "lead">;
 
 export const maxDuration = 60;
 
@@ -78,6 +83,9 @@ export async function POST(request: Request) {
 
   const supabase = await createSupabaseServerClient();
 
+  // Leadanalys (ADR-050): its own material and rules, the same protocol and storage.
+  if (assistant.kind === "lead_analysis") return handleLeadChat({ request, session, assistant, parsed: parsed.data, supabase });
+
   // AI test access and the assistant's model are read from the database for
   // every request – never taken from the client.
   const [{ data: profile }, { data: assistantRow }] = await Promise.all([
@@ -97,7 +105,7 @@ export async function POST(request: Request) {
   }
 
   // --- Conversation (existing and owned, or new) ---------------------------
-  let conversation: { id: string; title: string; data_class: ConversationDataClass };
+  let conversation: { id: string; title: string; data_class: DocumentConversationClass };
   let created = false;
   if (conversationId) {
     const { data } = await supabase
@@ -106,10 +114,10 @@ export async function POST(request: Request) {
       .eq("id", conversationId)
       .eq("user_id", userId)
       .maybeSingle<{ id: string; title: string; assistant_id: string; data_class: ConversationDataClass }>();
-    if (!data || data.assistant_id !== assistant.id) return jsonError("Konversationen hittades inte", 404);
-    conversation = data;
+    if (!data || data.assistant_id !== assistant.id || data.data_class === "lead") return jsonError("Konversationen hittades inte", 404);
+    conversation = { ...data, data_class: data.data_class };
   } else {
-    const dataClass: ConversationDataClass = mode === "synthetic" ? "synthetic" : "internal";
+    const dataClass: DocumentConversationClass = mode === "synthetic" ? "synthetic" : "internal";
     if (dataClass === "synthetic" && !userHasTestAccess) {
       await logSecurityEvent("access.denied", {
         actorId: userId,
@@ -123,7 +131,7 @@ export async function POST(request: Request) {
       .from("conversations")
       .insert({ assistant_id: assistant.id, title: titleFromMessage(message.content), data_class: dataClass })
       .select("id, title, data_class")
-      .single<{ id: string; title: string; data_class: ConversationDataClass }>();
+      .single<{ id: string; title: string; data_class: DocumentConversationClass }>();
     if (error || !data) return jsonError("Konversationen kunde inte skapas", 500);
     conversation = data;
     created = true;
@@ -218,7 +226,7 @@ export async function POST(request: Request) {
     JSON.stringify({ conversation: conversation.id, provider: provider.id, ...stats, attachments: attachmentContext.stats }),
   );
 
-  const referenced = [...new Set(rows.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
+  const referenced = [...new Set(rows.flatMap((m) => (m.sources ?? []).filter(isDocumentSource).map((s) => s.documentId)))];
   // Earlier answers are only sent again while their documents are still
   // readable – and, for external calls, still approved (revocation).
   const { data: readable } = referenced.length

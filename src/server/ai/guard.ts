@@ -26,7 +26,8 @@ import type { ContextChunk } from "./types";
  * approval function, RLS on every retrieved row).
  */
 
-export type ConversationDataClass = "internal" | "synthetic";
+/** "lead": the Leadanalys assistant's conversations (ADR-050) – lead data, never documents. */
+export type ConversationDataClass = "internal" | "synthetic" | "lead";
 export type DocumentDataClass = "internal" | "synthetic" | "approved";
 
 export class DataGuardError extends Error {
@@ -76,9 +77,19 @@ export function leadAnalysisExternalAllowed(): boolean {
   return serverEnv().FOLKE_LEAD_ANALYSIS_AI === "on" && externalProviderConfigured();
 }
 
+/**
+ * Leadanalys in the chat (ADR-050): a brief of stored lead facts and classifications (pseudonymised,
+ * no customer data, thread ids or links) may be sent to OpenAI only when FOLKE_LEAD_CHAT_AI is "on" –
+ * a separate decision on top of the lead analysis flag.
+ */
+export function leadChatExternalAllowed(): boolean {
+  return serverEnv().FOLKE_LEAD_CHAT_AI === "on" && leadAnalysisExternalAllowed();
+}
+
 /** Which provider a chat turn may use. Anything not explicitly allowed is mock. */
 export function chooseProviderId({ conversationClass, userHasTestAccess }: RoutingInput): "mock" | "openai" {
   if (!externalProviderConfigured()) return "mock";
+  if (conversationClass === "lead") return leadChatExternalAllowed() ? "openai" : "mock";
   if (conversationClass === "synthetic") return userHasTestAccess ? "openai" : "mock";
   return approvedDocumentsEnabled() ? "openai" : "mock";
 }
@@ -118,6 +129,11 @@ export function assertExternalAllowed(input: {
 }) {
   if (!input.external) return;
   if (!externalProviderConfigured()) throw new DataGuardError("external provider not configured");
+  if (input.conversationClass === "lead") {
+    if (!leadChatExternalAllowed()) throw new DataGuardError("lead chat is not enabled for the external provider");
+    if (input.context.length || (input.attachments ?? 0) > 0) throw new DataGuardError("lead conversations never send documents or attachments");
+    return;
+  }
   if (input.conversationClass === "synthetic") {
     if (!input.userHasTestAccess) throw new DataGuardError("user lacks AI test access");
   } else if (!approvedDocumentsEnabled()) {

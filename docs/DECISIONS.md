@@ -563,6 +563,56 @@ Fel som rättades under valideringen:
 - Fasta kontroller som alltid visas.
 - Att tolka "Virtuell" som inkommande bil.
 
+### ADR-050 – Leadanalys i chatten (V1)
+
+**Sammanhang:**
+- Leadanalys (ADR-048, ADR-049) visar svarstider, källor, Virtuell och sparade AI-klassificeringar, men en säljchef har ofta en konkret fråga: "Hur går det för en viss säljare?", "Är vi långsamma i Alingsås?", "Vad tar vi upp på säljmötet?".
+- Chatten får inte bli en parallell analysmotor. Leadanalys är källan till fakta och sparade klassificeringar.
+- CLAUDE.md och ADR-031 förbjuder OpenAI:s verktyg. Chatten har redan en källmodell med numrerade hänvisningar, verifiering och sparade källor.
+
+**Beslut:**
+- **En egen assistent,** "Leadanalys" (`assistants.kind = 'lead_analysis'`, sätts bara i databasen). Den används via vanliga assistentbehörigheter, men varje fråga kräver också leadåtkomst (`myLeadAccess`, RLS). Konversationerna har dataklassen `lead` (oföränderlig, insert-policyn kräver `app.has_lead_access()`).
+- **Ingen tool calling.** Servern tolkar frågan deterministiskt och bygger ett litet **underlag (brief)** ur data som redan finns i Folke. OpenAI får underlaget och ger ett strömmat svar. Chatten startar aldrig en hämtning från HubSpot eller en ny dialoganalys.
+- **Tolkning** (`src/server/lead-chat/intent.ts`, `scope.ts`): åtta nyckelordsgrupper (översikt, svarstid, källa, Virtuell, jämförelse, mönster, exempel, säljmöte, förklaring) och en period ur texten. Region, inkorg och säljare matchas mot det användaren får se. Flertydigt ger en motfråga, ett okänt namn ger "hittar ingen …" utan att avslöja något. Följdfrågor ärver urval, period och fråga. "Resten", "övriga" och "totalt" vidgar ett steg (säljare → inkorg → region → allt). Frågor om försäljning, prognoser, rangordning och kunduppgifter besvaras med fasta texter utan AI.
+- **Modulärt underlag** (`brief.ts`): bara de moduler frågan behöver (nyckeltal, svarstider, källor, Virtuell, jämförelse med föregående period, säljare, observationer, AI-mönster, exempel). Bara det modulerna behöver läses. 200–900 tokens för faktafrågor, upp till cirka 4 000 för säljmöte. Samma indata ger alltid samma underlag.
+- **Populationer** (`metrics.ts`): varje siffra har en population ("leads med registrerat säljsvar i urvalet", "leads där säljaren gav det första registrerade säljsvaret", "AI-analyserade dialoger" …) och ett ursprung (HubSpot-fakta eller AI-klassificering). Ordet "besvarade" används inte. Vid vidgning får underlaget samma mått för det tidigare urvalet och för övriga, ur samma rader.
+- **Exempel** väljs deterministiskt: nyast först, högst två per säljare och inkorg när urvalet är bredare än en säljare, aldrig dialoger där fortsättningen inte går att avgöra. Vid "samma typ av problem" används typerna från de leads det förra svaret hänvisade till.
+- **Källkedja:** varje lead i underlaget har ett nummer. Svarets [n] verifieras som i dokumentchatten (`verifyCitations`). Under svaret visas (`MessageSource`):
+  - numrerade leadkort med ursprung, avidentifierad motivering och "Öppna original i HubSpot"
+  - "Visa alla N" för de mängder som svaret bygger på (öppnar underlagspanelen)
+  - "Underlag", skrivet av servern: urval, period, täckning, antal analyserade dialoger och att ingen ny hämtning gjordes
+
+  Sparade leadkällor visas bara så länge användaren får läsa tråden, och länken byggs om från den verifierade mallen.
+- **Pseudonymisering:** säljare som användaren får se heter "Säljare N" i underlag, fråga och historik och översätts tillbaka på servern, även under strömningen. Alla andra kända säljarnamn och förnamn som flera säljare delar ersätts med "[namn]". Inga tråd-id, länkar, kundnamn eller dialogtexter skickas. Sparade motiveringar skickas avidentifierade, som i ADR-047, och en äldre körnings "Säljare N" blir "säljaren".
+- **`lead_context`** (jsonb, högst 2 kB, bara på leadkonversationer) minns urval, period, fråga och fokus mellan turerna. "Fråga Folke" i Leadanalys skickar sidans urval. Båda är bara hjälp: de valideras med zod och löses på nytt mot användarens åtkomst varje tur, och kan aldrig vidga den.
+- **Flaggan `FOLKE_LEAD_CHAT_AI`** (`off` som standard) kräver också `FOLKE_LEAD_ANALYSIS_AI=on`. Leverantören väljs bara av `chooseProviderId`, och `assertExternalAllowed` stoppar dokument och bilagor i leadanrop. Utan flaggan svarar assistenten med siffrorna utan AI.
+- **Kostnad** loggas som `lead_chat` med dataklassen `lead`. Samma budget och takt som chatten.
+
+**Robusthet före beta (2026-10-04):**
+- **Verifierade fakta i konversationen.** Varje svar sparar de serverberäknade siffror det använde, med population, urval och period, på sin underlagskälla (`lead_basis.facts`). Nästa underlag får dem tillbaka som "Tidigare verifierade fakta". Ett värde redovisas som ändrat bara när det aktuella underlaget har ett nytt värde för samma mått, population, urval och period. Då står det uttryckligen "tidigare … nu …". En fakta vars urval användaren inte längre får se tas bort. Det här är strukturellt (konversationens tillstånd och underlaget), inte bara en instruktion.
+- **Mönster → underlag på servern.** "Visa alla N" hör till svaret när svaret använder mönstrets eller observationens siffra ("13 av 82") eller ordalydelse, oavsett om modellen hänvisar med [n]. En siffra som flera mönster delar räknas bara tillsammans med mönstrets egen ordalydelse. Tre mängder visas direkt, resten under "Fler underlag".
+- **Saknat underlag.** Servern avgör varför underlaget saknas:
+  - perioden är inte hämtad
+  - dialogerna saknar aktuell AI-analys
+  - båda
+
+  Användaren får stegen att välja ("Uppdatera från HubSpot", "Analysera dialogerna"), i rätt ordning. Stegen anropar samma server actions som Leadanalys-sidan (`syncLeadsAction`, `analyseInboxAction`), som kontrollerar åtkomst, urval och kostnadsgränser igen. Folke startar aldrig ett steg själv. Chatten är inte låst medan ett steg pågår, och "Ställ frågan igen" fortsätter samma konversation. Att bara dagens datum saknas räknas inte som en lucka.
+- **Sista kontroll före anrop** (`assertNoIdentifiers`): underlaget och tidigare svar får inte innehålla HubSpot-id, säljartoken eller HubSpot-länkar.
+
+**Mätt i folke-dev 2026-10-03** (22 inkorgar, 608 leads senaste 30 dagarna, 91 dialoger med `lead-ai-3.1`, `gpt-6-luna`):
+- Tid till första text: median 1,5 s för faktafrågor och 1,7 s för analysfrågor. Hela svaret tar 3–4 s.
+- Datainläsning: median 86 ms.
+- Kostnad: 0,0002–0,0008 USD per svar.
+- Fasta svar utan AI: 0,4 s.
+
+**Alternativ som valdes bort:**
+- Tool calling (ej tillåtet, och svårare att granska).
+- Hela Leadanalys som kontext (dyrt, och populationer blandas).
+- En sammanfattningstabell eller en egen analys för chatten (parallell motor).
+- Fri tolkning av frågan med AI (skulle kunna vidga urvalet).
+- Separata hänvisningar `[L3]` (den befintliga verifieringen och chipsen räcker).
+- Strängare RLS på `lead_sellers`: en uppsert med `ON CONFLICT` kräver att raden är läsbar, så hämtningar för säljare i två regioner skulle ha fallerat. Chatten matchar i stället säljare bara via trådar som användaren får läsa.
+
 ---
 
 ## Öppna beslut

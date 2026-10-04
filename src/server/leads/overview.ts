@@ -394,7 +394,8 @@ export function isWaiting(row: LeadRow, c: StoredAnalysis["classification"] | un
   return c.purchaseIntent === "clear" || a.questions.some((q) => q.answered === "not_due");
 }
 
-function matches(filter: EvidenceFilter, row: LeadRow, a: StoredAnalysis | undefined, now: Date): boolean {
+/** Whether a lead belongs to an evidence filter (also used by the lead chat for its "Visa alla" sets). */
+export function matches(filter: EvidenceFilter, row: LeadRow, a: StoredAnalysis | undefined, now: Date): boolean {
   const c = a?.classification;
   if (filter.startsWith("opportunity:")) return Boolean(c?.assessment?.opportunities?.includes(filter.slice(12) as OpportunityType));
   if (filter.startsWith("strength:")) return Boolean(c?.assessment?.strengths?.includes(filter.slice(9) as StrengthType));

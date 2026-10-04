@@ -1,4 +1,5 @@
 import type { Attachment } from "@/lib/domain/types";
+import { leadChatContextSchema, type LeadChatContext } from "@/lib/leads/chat";
 
 /**
  * Hands a prompt (and its already uploaded attachments) from the start
@@ -11,6 +12,8 @@ const KEY = "folke:pending-prompt";
 export interface PendingPrompt {
   text: string;
   attachments: Attachment[];
+  /** Leadanalys: the selection the question was asked from (validated again on the server). */
+  leadContext?: LeadChatContext;
 }
 
 export function setPendingPrompt(prompt: PendingPrompt) {
@@ -28,7 +31,11 @@ export function takePendingPrompt(): PendingPrompt | null {
     if (!value) return null;
     const parsed = JSON.parse(value) as Partial<PendingPrompt>;
     return typeof parsed.text === "string" && parsed.text.trim()
-      ? { text: parsed.text, attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [] }
+      ? {
+          text: parsed.text,
+          attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+          leadContext: leadChatContextSchema.safeParse(parsed.leadContext).data,
+        }
       : null;
   } catch {
     return null;

@@ -1,5 +1,7 @@
 "use client";
 
+import { MessageSquareText } from "lucide-react";
+
 import type { SellerPattern } from "@/lib/leads/types";
 
 import type { EvidenceRequest } from "./evidence-sheet";
@@ -14,12 +16,15 @@ export function SellerCoaching({
   stats,
   pattern,
   onEvidence,
+  onAsk,
 }: {
   name: string;
   /** Short figures, e.g. ["39 analyserade dialoger", "median 5 min i kontorstid"]. */
   stats: string[];
   pattern: SellerPattern | null;
   onEvidence: (r: EvidenceRequest) => void;
+  /** "Fråga Folke" about this seller (ADR-050); absent when the assistant is not available. */
+  onAsk?: () => void;
 }) {
   const items = pattern ? pattern.strengths.length + pattern.stalls.length : 0;
   return (
@@ -28,6 +33,16 @@ export function SellerCoaching({
         <p className="font-medium">{name}</p>
         <p className="text-sm text-muted-foreground tabular-nums">{stats.join(" · ")}</p>
       </div>
+      {onAsk && (
+        <button
+          type="button"
+          onClick={onAsk}
+          className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          <MessageSquareText className="size-3.5" aria-hidden />
+          Fråga Folke om {name}
+        </button>
+      )}
       {pattern && items > 0 && (
         <div className="mt-3 grid gap-4 md:grid-cols-2">
           <Column title="Återkommande styrkor" list={pattern.strengths} seller={name} onEvidence={onEvidence} />

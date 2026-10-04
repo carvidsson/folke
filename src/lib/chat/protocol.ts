@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import type { SourceReference } from "@/lib/domain/types";
+import type { MessageSource } from "@/lib/domain/types";
+import { leadChatContextSchema } from "@/lib/leads/chat";
 
 /**
  * Wire protocol between the chat UI and POST /api/chat.
@@ -26,6 +27,11 @@ export const chatRequestSchema = z.object({
     /** Uploaded, ready conversation attachments (ADR-045); the server verifies ownership. */
     attachmentIds: z.array(z.uuid()).max(5).optional(),
   }),
+  /**
+   * Leadanalys (ADR-050): the page selection a NEW lead conversation starts from. Help only – the
+   * server re-resolves it against the user's lead access, and it never widens what may be read.
+   */
+  leadContext: leadChatContextSchema.optional(),
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
@@ -43,10 +49,10 @@ export type ChatStreamEvent =
       model: string | null;
     }
   /** Retrieved excerpts (may be narrowed to the cited ones in "done"). */
-  | { type: "sources"; sources: SourceReference[] }
+  | { type: "sources"; sources: MessageSource[] }
   | { type: "text"; delta: string }
   /** Final, verified answer: content without invalid citations, cited sources only. */
-  | { type: "done"; content: string; sources: SourceReference[] }
+  | { type: "done"; content: string; sources: MessageSource[] }
   | { type: "error"; message: string };
 
 export type ConversationMode = "standard" | "synthetic";

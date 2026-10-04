@@ -144,6 +144,24 @@ describe("final check before external calls", () => {
     ).not.toThrow();
   });
 
+  it("Leadanalys conversations use OpenAI only with both lead flags, and never with documents (ADR-050)", () => {
+    const lead = { external: true, conversationClass: "lead" as const, userHasTestAccess: false, context: [] };
+    setEnv({ ...openAIOn, FOLKE_LEAD_ANALYSIS_AI: "off", FOLKE_LEAD_CHAT_AI: "off" });
+    expect(chooseProviderId(lead)).toBe("mock");
+    expect(() => assertExternalAllowed(lead)).toThrow(DataGuardError);
+    setEnv({ ...openAIOn, FOLKE_LEAD_ANALYSIS_AI: "on", FOLKE_LEAD_CHAT_AI: "off" });
+    expect(chooseProviderId(lead)).toBe("mock");
+    setEnv({ ...openAIOn, FOLKE_LEAD_ANALYSIS_AI: "off", FOLKE_LEAD_CHAT_AI: "on" });
+    expect(chooseProviderId(lead)).toBe("mock");
+    setEnv({ ...openAIOn, FOLKE_LEAD_ANALYSIS_AI: "on", FOLKE_LEAD_CHAT_AI: "on" });
+    expect(chooseProviderId(lead)).toBe("openai");
+    expect(() => assertExternalAllowed(lead)).not.toThrow();
+    // The lead flag never opens ordinary conversations, and lead calls never carry documents or attachments.
+    expect(chooseProviderId({ conversationClass: "internal", userHasTestAccess: false })).toBe("mock");
+    expect(() => assertExternalAllowed({ ...lead, context: [{ dataClass: "approved" }] })).toThrow(DataGuardError);
+    expect(() => assertExternalAllowed({ ...lead, attachments: 1 })).toThrow(DataGuardError);
+  });
+
   it("only embeds synthetic or approved documents", () => {
     expect(() => assertEmbeddable([{ ai_data_class: "synthetic" }, { ai_data_class: "approved" }])).not.toThrow();
     expect(() => assertEmbeddable([{ ai_data_class: "synthetic" }, { ai_data_class: "internal" }])).toThrow(DataGuardError);

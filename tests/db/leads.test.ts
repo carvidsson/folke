@@ -237,6 +237,9 @@ describe("lead access per group, user and region", () => {
     );
     await tx.query(`insert into public.lead_access_grants (group_id, region_id) values ('${G.sales}', '${RA}')`);
     await tx.query(`insert into public.lead_access_grants (user_id, region_id) values ('${U.loner}', null)`);
+    // The Leadanalys assistant (ADR-050): the sales group, and a user without lead access.
+    await tx.query(`insert into public.assistant_grants (assistant_id, group_id) select id, '${G.sales}' from public.assistants where slug = 'leadanalys'`);
+    await tx.query(`insert into public.assistant_grants (assistant_id, user_id) select id, '${U.mechanic}' from public.assistants where slug = 'leadanalys'`);
   }
 
   /** As the owner: set up; then as `user` run `fn` (one transaction, rolled back). */
@@ -458,6 +461,66 @@ describe("lead access per group, user and region", () => {
       await tx.query(`delete from public.lead_access_grants where group_id = '${G.sales}'`);
       await tx.exec("set local role authenticated");
       expect((await tx.query(`select 1 from public.lead_inboxes where hubspot_inbox_id like '8000%'`)).rows).toHaveLength(0);
+    });
+  });
+  // --- Leadanalys in the chat (ADR-050) ------------------------------------
+  const leadAssistant = "(select id from public.assistants where slug = 'leadanalys')";
+
+  it("the Leadanalys assistant is marked as such; users can read the kind but never change it", async () => {
+    await withSetup(U.seller, async (tx) => {
+      const rows = await tx.query<{ kind: string }>(`select kind from public.assistants where slug = 'leadanalys'`);
+      expect(rows.rows[0]?.kind).toBe("lead_analysis");
+    });
+    await withSetup(U.admin, async (tx) => {
+      await expectDenied(tx, `update public.assistants set kind = 'documents' where slug = 'leadanalys'`);
+      await expectDenied(tx, `update public.assistants set kind = 'lead_analysis' where slug = 'garanti'`);
+    });
+  });
+
+  it("only users with lead access start lead conversations, and only as data class 'lead'", async () => {
+    await withSetup(U.seller, async (tx) => {
+      const created = await tx.query<{ id: string }>(
+        `insert into public.conversations (user_id, assistant_id, title, data_class) values ('${U.seller}', ${leadAssistant}, 'Leadfråga', 'lead') returning id`,
+      );
+      expect(created.rows).toHaveLength(1);
+      await expectDenied(tx, `insert into public.conversations (user_id, assistant_id, title, data_class) values ('${U.seller}', ${leadAssistant}, 'x', 'internal')`);
+      // A document assistant never gets a lead conversation.
+      await expectDenied(
+        tx,
+        `insert into public.conversations (user_id, assistant_id, title, data_class) values ('${U.seller}', (select id from public.assistants where slug = 'salj'), 'x', 'lead')`,
+      );
+      // The data class cannot be changed afterwards.
+      await expectDenied(tx, `update public.conversations set data_class = 'internal' where id = '${created.rows[0].id}'`);
+      // The remembered selection: an object of bounded size, on lead conversations only.
+      await tx.query(`update public.conversations set lead_context = '{"regionId": null, "preset": "30d"}' where id = '${created.rows[0].id}'`);
+      await expectDenied(tx, `update public.conversations set lead_context = '[1, 2]' where id = '${created.rows[0].id}'`);
+      await expectDenied(tx, `update public.conversations set lead_context = jsonb_build_object('x', repeat('a', 3000)) where id = '${created.rows[0].id}'`);
+    });
+    // The assistant grant alone is not enough: no lead access, no lead conversation.
+    await withSetup(U.mechanic, async (tx) => {
+      await expectDenied(tx, `insert into public.conversations (user_id, assistant_id, title, data_class) values ('${U.mechanic}', ${leadAssistant}, 'x', 'lead')`);
+    });
+  });
+
+  it("lead_context is only allowed on lead conversations", async () => {
+    await withSetup(U.seller, async (tx) => {
+      const own = await tx.query<{ id: string }>(`select id from public.conversations where user_id = '${U.seller}' and data_class = 'internal' limit 1`);
+      expect(own.rows).toHaveLength(1);
+      await expectDenied(tx, `update public.conversations set lead_context = '{}' where id = '${own.rows[0].id}'`);
+    });
+  });
+
+  it("usage of the lead chat is recorded separately", async () => {
+    await asServiceRollback(db, async (tx) => {
+      await tx.query(
+        `insert into public.ai_usage (kind, user_id, provider, model, input_tokens, output_tokens, cost_usd, cost_sek, estimated, data_class, purpose)
+         values ('chat', '${U.seller}', 'openai', 'gpt-6-luna', 1, 1, 0, 0, false, 'lead', 'lead_chat')`,
+      );
+      await expectDenied(
+        tx,
+        `insert into public.ai_usage (kind, user_id, provider, model, input_tokens, output_tokens, cost_usd, cost_sek, estimated, data_class, purpose)
+         values ('chat', '${U.seller}', 'openai', 'gpt-6-luna', 1, 1, 0, 0, false, 'other', 'lead_chat')`,
+      );
     });
   });
 });

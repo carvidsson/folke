@@ -16,6 +16,7 @@ import type { CoverageInfo, Insight, LeadMetrics, LeadOverview, LeadRow, SellerF
 import { cn } from "@/lib/utils";
 import { syncLeadsAction } from "@/server/leads/actions";
 
+import { AskFolkeMenu, useAskFolke } from "./ask-folke";
 import { BarList, DistributionBars, DonutWithList } from "./charts";
 import { EvidenceSheet, type EvidenceRequest } from "./evidence-sheet";
 import { LeadAI, type AIStateView } from "./lead-ai";
@@ -38,6 +39,8 @@ export interface LeadAnalysisProps {
   linkConfigured: boolean;
   maxSyncDays: number;
   today: string;
+  /** The Leadanalys assistant's slug when the user may use it ("Fråga Folke", ADR-050). */
+  askFolke: string | null;
 }
 
 /** Query string for a scope and period. */
@@ -54,7 +57,7 @@ function href(scope: { regionId?: string | null; inboxId?: string | null }, peri
   return `/leads${q ? `?${q}` : ""}`;
 }
 
-export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll, linkConfigured, maxSyncDays, today }: LeadAnalysisProps) {
+export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll, linkConfigured, maxSyncDays, today, askFolke }: LeadAnalysisProps) {
   const router = useRouter();
   const { scope, period, metrics, coverage, comparison } = overview;
   const scopeParams = { regionId: scope.type === "region" ? scope.regionId : null, inboxId: scope.inboxId };
@@ -94,6 +97,7 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
+          <AskFolkeMenu assistantSlug={askFolke} scopeName={scope.type === "all" ? "alla leads" : scope.name} context={actionScope} />
           <Select
             value={period.preset}
             onValueChange={(v) => v !== "custom" && router.push(href(scopeParams, { preset: v, from: period.from, to: period.to }))}
@@ -286,7 +290,16 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
         onEvidence={setEvidence}
       />
 
-      {detail && <InboxDetail detail={detail} linkConfigured={linkConfigured} patterns={ai.current?.summary?.sellerPatterns ?? []} onEvidence={setEvidence} />}
+      {detail && (
+        <InboxDetail
+          detail={detail}
+          linkConfigured={linkConfigured}
+          patterns={ai.current?.summary?.sellerPatterns ?? []}
+          onEvidence={setEvidence}
+          askFolke={askFolke}
+          context={actionScope}
+        />
+      )}
 
       <Section id="inflode" title="När leadsen kommer" origin="fact" description="Alla leads i urvalet efter veckodag och tid på dygnet. Använd det för bemanning: när kommer de och när besvaras de?">
         <Panel className="px-6 py-5">
@@ -588,12 +601,17 @@ function InboxDetail({
   linkConfigured,
   patterns,
   onEvidence,
+  askFolke,
+  context,
 }: {
   detail: NonNullable<LeadAnalysisProps["detail"]>;
   linkConfigured: boolean;
   patterns: SellerPattern[];
   onEvidence: (r: EvidenceRequest) => void;
+  askFolke: string | null;
+  context: { regionId: string | null; inboxId: string | null; preset: string; from: string; to: string };
 }) {
+  const ask = useAskFolke(askFolke);
   const patternOf = new Map(patterns.map((p) => [p.sellerId, p]));
   return (
     <>
@@ -613,6 +631,7 @@ function InboxDetail({
                   name={s.name}
                   pattern={p}
                   onEvidence={onEvidence}
+                  onAsk={ask && /^A-\d{1,20}$/.test(s.id) ? () => ask(`Hur går det för ${s.name}? Vad fungerar och vad kan utvecklas?`, { ...context, preset: context.preset as "30d", sellerId: s.id }) : undefined}
                   stats={[
                     ...(p ? [`${number.format(p.dialogues)} analyserade dialoger`] : []),
                     `${number.format(s.firstResponses)} första säljsvar`,

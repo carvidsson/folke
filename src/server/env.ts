@@ -85,6 +85,12 @@ const schema = z.object({
    * FOLKE_AI_PROVIDER=openai). Never enabled in the pilot without approval.
    */
   FOLKE_LEAD_ANALYSIS_AI: z.enum(["off", "on"]).default("off"),
+  /**
+   * Leadanalys in the chat (ADR-050). "off" (default): the assistant answers with the figures only,
+   * without AI. "on": a pseudonymised brief of stored lead data may be sent to OpenAI (also requires
+   * FOLKE_LEAD_ANALYSIS_AI=on and FOLKE_AI_PROVIDER=openai). Never enabled in the pilot without approval.
+   */
+  FOLKE_LEAD_CHAT_AI: z.enum(["off", "on"]).default("off"),
 });
 
 export type ServerEnv = z.infer<typeof schema>;

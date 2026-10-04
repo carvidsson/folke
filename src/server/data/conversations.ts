@@ -8,8 +8,9 @@ import type {
   ID,
   Message,
   MessageRole,
-  SourceReference,
+  MessageSource,
 } from "@/lib/domain/types";
+import { isDocumentSource } from "@/lib/domain/types";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
 import { unwrap } from "./errors";
@@ -31,7 +32,7 @@ interface MessageRow {
   id: string;
   role: MessageRole;
   content: string;
-  sources: SourceReference[];
+  sources: MessageSource[];
   attachments: Omit<Attachment, "id">[];
   created_at: string;
 }
@@ -81,7 +82,8 @@ export async function getConversation(ownerId: ID, id: ID): Promise<Conversation
 
   // Stored sources are only shown while the user can still read the
   // document, so old answers do not become a way around revoked access.
-  const referenced = [...new Set(row.messages.flatMap((m) => (m.sources ?? []).map((s) => s.documentId)))];
+  const all = row.messages.flatMap((m) => m.sources ?? []);
+  const referenced = [...new Set(all.filter(isDocumentSource).map((s) => s.documentId))];
   const readable = new Set(
     referenced.length
       ? unwrap(await supabase.from("documents").select("id").in("id", referenced).returns<{ id: string }[]>()).map(
@@ -89,9 +91,13 @@ export async function getConversation(ownerId: ID, id: ID): Promise<Conversation
         )
       : [],
   );
+  const leads = await readableLeads(
+    supabase,
+    all.flatMap((s) => (s.kind === "lead" ? [s.id] : s.kind === "lead_set" ? s.threadIds : [])),
+  );
 
   const messages: Message[] = row.messages.map((m) => {
-    const sources = (m.sources ?? []).filter((s) => readable.has(s.documentId));
+    const sources = (m.sources ?? []).flatMap((s) => visibleSource(s, readable, leads));
     return {
       id: m.id,
       role: m.role,
@@ -102,4 +108,47 @@ export async function getConversation(ownerId: ID, id: ID): Promise<Conversation
     };
   });
   return { ...toSummary(row), messages };
+}
+
+/**
+ * Leadanalys sources (ADR-050) follow the user's current lead access (RLS on lead_threads): a lead
+ * the user can no longer see disappears from old answers, and the HubSpot link is rebuilt from the
+ * current verified template.
+ */
+async function readableLeads(supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>, ids: string[]) {
+  const unique = [...new Set(ids)].filter((id) => /^\d{1,20}$/.test(id));
+  if (!unique.length) return { ids: new Set<string>(), template: null as string | null };
+  const found = new Set<string>();
+  for (let i = 0; i < unique.length; i += 100) {
+    const rows = unwrap(
+      await supabase
+        .from("lead_threads")
+        .select("hubspot_thread_id")
+        .in("hubspot_thread_id", unique.slice(i, i + 100))
+        .returns<{ hubspot_thread_id: string }[]>(),
+    );
+    for (const r of rows) found.add(r.hubspot_thread_id);
+  }
+  const settings = unwrap(
+    await supabase
+      .from("lead_settings")
+      .select("hubspot_thread_url_template")
+      .limit(1)
+      .returns<{ hubspot_thread_url_template: string | null }[]>(),
+  );
+  return { ids: found, template: settings[0]?.hubspot_thread_url_template ?? null };
+}
+
+function visibleSource(
+  s: MessageSource,
+  documents: Set<string>,
+  leads: { ids: Set<string>; template: string | null },
+): MessageSource[] {
+  if (isDocumentSource(s)) return documents.has(s.documentId) ? [s] : [];
+  if (s.kind === "lead") return leads.ids.has(s.id) ? [{ ...s, hubspotUrl: leads.template ? leads.template.replace("{threadId}", s.id) : null }] : [];
+  if (s.kind === "lead_set") {
+    const threadIds = s.threadIds.filter((id) => leads.ids.has(id));
+    return threadIds.length ? [{ ...s, threadIds, count: threadIds.length }] : [];
+  }
+  return [s];
 }

@@ -10,6 +10,7 @@ import { LeadAnalysis } from "@/components/leads/lead-analysis";
 import { Button } from "@/components/ui/button";
 import { resolvePeriod } from "@/lib/leads/periods";
 import { leadAnalysisExternalAllowed } from "@/server/ai/guard";
+import { listMyAssistants } from "@/server/data/assistants";
 import { getThreadUrlTemplate } from "@/server/data/leads";
 import { requireLeadAccessPage } from "@/server/leads/access";
 import { stockholmTime } from "@/server/leads/business-hours";
@@ -75,12 +76,15 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     );
   }
 
-  const [overview, detail, ai, template] = await Promise.all([
+  const [overview, detail, ai, template, assistants] = await Promise.all([
     buildOverview(data, period, day),
     data.scope.type === "inbox" ? inboxDetail(data, period) : Promise.resolve(null),
     aiState(data, period),
     getThreadUrlTemplate(),
+    listMyAssistants(),
   ]);
+  // "Fråga Folke" only when the user may use the Leadanalys assistant (ADR-050).
+  const leadAssistant = assistants.find((a) => a.kind === "lead_analysis" && a.status === "active");
 
   return (
     <PageContainer width="wide">
@@ -93,6 +97,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         linkConfigured={!!template}
         maxSyncDays={MAX_SYNC_DAYS}
         today={day}
+        askFolke={leadAssistant?.slug ?? null}
       />
     </PageContainer>
   );

@@ -15,6 +15,9 @@ export async function generateMetadata({
   return { title: conversation?.title ?? "Chatt" };
 }
 
+// Leadanalys steps started from the chat (ADR-050) run as server actions on this page: the same time budget as on the Leadanalys page.
+export const maxDuration = 300;
+
 export default async function ConversationPage({ params }: PageProps<"/chat/[conversationId]">) {
   const { conversationId } = await params;
   const { user } = await getSession();

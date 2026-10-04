@@ -7,12 +7,15 @@ import { streamChat } from "@/lib/chat/client";
 import type { ConversationMode } from "@/lib/chat/protocol";
 import type { WaitingPhase } from "@/lib/chat/waiting-texts";
 import type { Attachment, Message } from "@/lib/domain/types";
+import type { LeadChatContext } from "@/lib/leads/chat";
 
 export type ChatStatus = "idle" | "submitted" | "streaming" | "error";
 
 export interface OutgoingMessage {
   text: string;
   attachments: Attachment[];
+  /** Leadanalys: the page selection a new conversation starts from. */
+  leadContext?: LeadChatContext;
 }
 
 function tempId() {
@@ -84,6 +87,7 @@ export function useChat({
             assistantId,
             conversationId: conversationId.current,
             mode: conversationId.current ? undefined : mode,
+            leadContext: conversationId.current ? undefined : outgoing.leadContext,
             message: {
               content: outgoing.text,
               attachmentIds: outgoing.attachments.flatMap((a) => (a.attachmentId ? [a.attachmentId] : [])),

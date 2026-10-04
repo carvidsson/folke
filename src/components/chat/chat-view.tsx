@@ -3,7 +3,7 @@
 import { ArrowDown, CircleAlert, Menu, MoreHorizontal, Paperclip, Pencil, RotateCcw, SquarePen, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AssistantAvatar } from "@/components/common/assistant-avatar";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -27,14 +27,15 @@ import { Composer } from "./composer";
 import { ConversationAttachmentsDialog } from "./conversation-attachments-dialog";
 import { DeleteConversationsDialog, RenameConversationDialog } from "./conversation-dialogs";
 import { AssistantMessage, UserMessage } from "./message";
+import { ChatActionsContext } from "./chat-actions";
 import { useChat } from "./use-chat";
 
 export function ChatView({
   assistants,
   initialAssistantId,
   conversation,
-  syntheticModeAvailable = false,
-  attachmentsEnabled = false,
+  syntheticModeAvailable: syntheticSetting = false,
+  attachmentsEnabled: attachmentsSetting = false,
 }: {
   assistants: Assistant[];
   initialAssistantId: string;
@@ -47,6 +48,10 @@ export function ChatView({
   const [assistantId, setAssistantId] = useState(initialAssistantId);
   const assistant = assistants.find((a) => a.id === assistantId) ?? assistants[0];
   const [syntheticRequested, setSyntheticRequested] = useState(false);
+  // Leadanalys (ADR-050) has its own material: no attachments and no synthetic test mode.
+  const isLead = assistant.kind === "lead_analysis";
+  const attachmentsEnabled = attachmentsSetting && !isLead;
+  const syntheticModeAvailable = syntheticSetting && !isLead;
   const synthetic = conversation ? conversation.dataClass === "synthetic" : syntheticModeAvailable && syntheticRequested;
 
   const chat = useChat({
@@ -56,6 +61,8 @@ export function ChatView({
     mode: synthetic ? "synthetic" : "standard",
   });
   const { messages, status, isBusy, send } = chat;
+  // "Ställ frågan igen" after a Leadanalys step (ADR-050): same conversation, same composer state.
+  const chatActions = useMemo(() => ({ ask: (text: string) => send({ text, attachments: [] }), busy: isBusy }), [send, isBusy]);
   const isEmpty = messages.length === 0;
 
   // Prompt handed over from the start page's quick-start box.
@@ -105,6 +112,7 @@ export function ChatView({
   return (
     // overflow-hidden: nothing in the chat may add height to the page's own
     // scroll area (<main> in AppShell); only the message list scrolls.
+    <ChatActionsContext.Provider value={chatActions}>
     <div className="flex h-full flex-col overflow-hidden">
       <ChatHeader
         title={conversation?.title}
@@ -206,6 +214,7 @@ export function ChatView({
         </>
       )}
     </div>
+    </ChatActionsContext.Provider>
   );
 }
 

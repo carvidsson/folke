@@ -78,6 +78,8 @@ export interface Assistant {
   suggestedPrompts: string[];
   /** Chosen AI model (validated against the server's allowlist; null = default). */
   aiModel: string | null;
+  /** "lead_analysis": answers from Leadanalys instead of the knowledge base (ADR-050). Set in the database only. */
+  kind: "documents" | "lead_analysis";
 }
 
 // ---------------------------------------------------------------------------
@@ -170,11 +172,89 @@ export interface Attachment {
 
 /** A reference from an assistant answer back to a knowledge document. */
 export interface SourceReference {
+  kind?: "document";
   id: ID;
   documentId: ID;
   title: string;
   excerpt: string;
   location: string | null;
+}
+
+/**
+ * Leadanalys in the chat (ADR-050): one lead an answer refers to, with metadata and the
+ * avidentified reason from the stored classification. Everything here comes from the server –
+ * never from the model. `id` is the HubSpot thread id (used to open the original and to re-check
+ * access); the HubSpot link is built from the verified template when the answer is shown.
+ */
+export interface LeadSourceReference {
+  kind: "lead";
+  id: string;
+  /** "26 sep · Blocket · Volkswagen ID.4" */
+  title: string;
+  inbox: string;
+  seller: string | null;
+  /** "Tydligt stöd", "Kunde gjort mer", "Går inte att avgöra från HubSpot" … */
+  label: string | null;
+  reason: string | null;
+  origin: "fact" | "classification";
+  hubspotUrl: string | null;
+}
+
+/** A set of leads behind an aggregated statement ("Visa alla 14"), opened in the evidence sheet. */
+export interface LeadSetReference {
+  kind: "lead_set";
+  id: string;
+  title: string;
+  count: number;
+  threadIds: string[];
+  scope: { regionId: string | null; inboxId: string | null; preset: string; from: string; to: string };
+}
+
+/** The server's description of what the answer is based on (never written by the model). */
+export interface LeadBasisReference {
+  kind: "lead_basis";
+  id: string;
+  selection: string;
+  period: string;
+  lines: string[];
+  /**
+   * Server-computed figures the answer used. Later turns get them back as verified facts, so a figure
+   * is never "corrected" just because a later brief does not contain it.
+   */
+  facts?: VerifiedFact[];
+}
+
+/** One server-computed figure, with what it was counted among and for which selection and period. */
+export interface VerifiedFact {
+  label: string;
+  value: string;
+  of?: number;
+  population: string;
+  /** "Alingsås Volkswagen PB · Andreas Lindgren" – names as shown to the user. */
+  selection: string;
+  period: string;
+  /** The ids the figure was computed for; re-checked against the user's access every turn. */
+  scope: { regionId: string | null; inboxId: string | null; sellerId: string | null };
+}
+
+/**
+ * A step the user can choose to fill a gap in the lead material (ADR-050): fetch from HubSpot or
+ * analyse the dialogues. It only runs on the user's click, through the Leadanalys actions, which check
+ * access, cost limits and the selection again. `question` is asked again when the steps are done.
+ */
+export interface LeadActionReference {
+  kind: "lead_action";
+  id: string;
+  steps: { action: "sync" | "analyse"; label: string; detail: string; inboxIds: string[] }[];
+  scope: { regionId: string | null; inboxId: string | null; preset: "custom"; from: string; to: string };
+  question: string;
+}
+
+/** Everything an assistant answer can show under it: document excerpts, or (Leadanalys) leads, lead sets, the basis and actions. */
+export type MessageSource = SourceReference | LeadSourceReference | LeadSetReference | LeadBasisReference | LeadActionReference;
+
+export function isDocumentSource(s: MessageSource): s is SourceReference {
+  return s.kind === undefined || s.kind === "document";
 }
 
 export interface Message {
@@ -183,11 +263,11 @@ export interface Message {
   content: string;
   createdAt: Timestamp;
   attachments?: Attachment[];
-  sources?: SourceReference[];
+  sources?: MessageSource[];
 }
 
-/** "synthetic" conversations may use an external AI provider (test data only). */
-export type ConversationDataClass = "internal" | "synthetic";
+/** "lead": Leadanalys conversations (ADR-050). "synthetic" conversations may use an external AI provider (test data only). */
+export type ConversationDataClass = "internal" | "synthetic" | "lead";
 
 export interface Conversation {
   id: ID;

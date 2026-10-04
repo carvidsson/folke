@@ -16,7 +16,7 @@ import { unwrap } from "./errors";
 
 // Never select `instructions` here: the column is not granted to end users.
 const ASSISTANT_COLUMNS =
-  "id, slug, name, tagline, description, icon, tone, status, suggested_prompts, sort_order, ai_model, assistant_managers(user_id), assistant_collections(collection_id)";
+  "id, slug, name, tagline, description, icon, tone, status, suggested_prompts, sort_order, ai_model, kind, assistant_managers(user_id), assistant_collections(collection_id)";
 
 interface AssistantRow {
   id: string;
@@ -30,6 +30,7 @@ interface AssistantRow {
   suggested_prompts: string[];
   sort_order: number;
   ai_model: string | null;
+  kind: Assistant["kind"];
   assistant_managers: { user_id: string }[];
   assistant_collections: { collection_id: string }[];
 }
@@ -46,6 +47,7 @@ function toAssistant(row: AssistantRow): Assistant {
     status: row.status,
     suggestedPrompts: row.suggested_prompts,
     aiModel: row.ai_model,
+    kind: row.kind ?? "documents",
     managerIds: row.assistant_managers.map((m) => m.user_id),
     collectionIds: row.assistant_collections.map((c) => c.collection_id),
   };
