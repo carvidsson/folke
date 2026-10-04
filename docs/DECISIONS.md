@@ -613,6 +613,39 @@ Fel som rättades under valideringen:
 - Separata hänvisningar `[L3]` (den befintliga verifieringen och chipsen räcker).
 - Strängare RLS på `lead_sellers`: en uppsert med `ON CONFLICT` kräver att raden är läsbar, så hämtningar för säljare i två regioner skulle ha fallerat. Chatten matchar i stället säljare bara via trådar som användaren får läsa.
 
+### ADR-051 – AI-analysen av en inkorg som serverjobb
+
+**Sammanhang:**
+- AI-analysen av en inkorg tar 60–200 sekunder och kördes som en enda lång server action.
+- Om webbläsarens begäran bröts visade knappen "kunde inte genomföras" medan servern blev klar. Exempel: skärmlås, byte av app, en flik som Safari laddar om eller byte av nät.
+- Ett nytt klick startade samma analys igen, med dubbel kostnad. Det hände i beta 2026-10-04 från en iPhone. Loggarna visar att servern blev klar efter 63 s (status 200) medan sidan laddades om efter 25 s.
+
+**Beslut:**
+- **Körningen registreras i databasen** (`lead_analysis_jobs`) med status `running`, `completed` eller `failed`, heartbeat, körning och felmeddelande.
+  - Starten (`start_lead_analysis_job`) svarar direkt.
+  - Arbetet görs efter svaret med Next.js `after()`. På Vercel är det `waitUntil` i samma funktion, inom sidans `maxDuration` (300 s), och oberoende av om webbläsaren är kvar. Jobbet ryms: högst 60 s hämtning plus 200 s analys.
+- **Ingen dubbelstart.** Ett unikt index tillåter bara en pågående körning per inkorg, period, analysmetod och modell. En andra start returnerar den pågående körningen ("Analysen pågår redan"), så det blir aldrig två samtidiga OpenAI-analyser.
+- **Status läses från servern.** Leadanalys-sidan och chattens knapp använder samma start- och statusåtgärder (`startInboxAnalysisAction`, `inboxAnalysisStatusAction`) och samma jobb.
+  - En förlorad begäran räknas inte som ett fel. Klienten frågar servern i stället.
+  - Vid omladdning, när användaren kommer tillbaka till fliken eller när nätet återkommer läses status på nytt.
+  - Chattens knapp följer bara pågående jobb och startar aldrig något nytt utan ett klick.
+- **Verkliga fel och fastnade jobb:**
+  - Fel från HubSpot, OpenAI, budget eller kod markerar jobbet `failed` med ett kort meddelande, och det kan startas om.
+  - Ett jobb utan heartbeat i 150 s, eller äldre än 6 minuter, kan inte längre köra eftersom plattformen stoppar funktionen efter 5 minuter. Det visas som avbrutet och markeras `failed` vid nästa start.
+- **Behörighet:**
+  - Starta kräver åtkomst till inkorgen (`app.can_read_lead_inbox`, kontrollerat i funktionen), och läsning sker via RLS.
+  - Bara den som startade jobbet kan rapportera heartbeat eller slut, och bara med en körning av samma inkorg.
+  - Ingen användare skriver tabellen direkt.
+  - Jobbet körs med användarens egen session, så samma RLS, kostnadsgränser och loggning gäller som tidigare.
+- **Ingen ny infrastruktur:** ingen kö, ingen cron och inga Vercel Workflows. Det behövs inte när jobbet ryms i en funktions maxtid.
+
+**Alternativ som valdes bort:**
+- En klient som väntar längre på samma begäran (löser inte skärmlås eller omladdning).
+- Vercel Queues/Workflows eller en egen kö (onödigt för ett jobb som ryms inom 300 s).
+- Ett lås i minnet (fungerar inte mellan serverinstanser).
+
+**Begränsning:** ett jobb som behöver mer än 5 minuter kan inte göras så här. Det skulle kräva kö eller workflow. Dagens jobb har tidsbudgetar som stoppar i tid (`AI_TIME_BUDGET_MS`), och det som återstår analyseras vid nästa klick.
+
 ---
 
 ## Öppna beslut

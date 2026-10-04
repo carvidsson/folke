@@ -1,19 +1,24 @@
 "use server";
 
+import { after } from "next/server";
 import { z } from "zod";
 
 import { daysBetween, resolvePeriod } from "@/lib/leads/periods";
 import { OPPORTUNITY_TYPES, STRENGTH_TYPES, type EvidenceFilter, type EvidenceRow, type LeadActionResult, type LeadAIResult } from "@/lib/leads/types";
 import { leadAnalysisExternalAllowed } from "@/server/ai/guard";
+import { defaultChatModel } from "@/server/ai/models";
 import { logSecurityEvent } from "@/server/audit";
-import { getRun, leadStore } from "@/server/data/leads";
+import { getRun, latestAnalysisJob, leadStore, startAnalysisJob, type AnalysisJob } from "@/server/data/leads";
+import { createSupabaseServerClient } from "@/server/supabase/server";
 
 import { requireLeadAccess } from "./access";
 import { stockholmTime } from "./business-hours";
 import { HubSpotError, hubSpotConfigured } from "./hubspot";
 import { evidence, resolveScope, RESPONSE_BUCKETS } from "./overview";
+import { effectiveJob, runInboxAnalysisJob } from "./jobs";
+import { ANALYSIS_VERSION } from "./analysis";
 import { renderStoredRun } from "./runs";
-import { analyseInbox, MAX_SYNC_DAYS, summariseScope } from "./service";
+import { MAX_SYNC_DAYS, summariseScope } from "./service";
 import { syncInbox } from "./sync";
 
 /**
@@ -105,39 +110,71 @@ export async function syncLeadsAction(
   return { ok: true, data: { done, remaining: queue.filter((i) => !done.includes(i)), incomplete } };
 }
 
-/** Updates one inbox from HubSpot and analyses what changed (stored analyses are reused). */
-export async function analyseInboxAction(raw: unknown): Promise<LeadActionResult<LeadAIResult>> {
+/** The job and, when it is done, the stored run as the page shows it. */
+export interface InboxAnalysisState {
+  job: { id: string; status: "running" | "completed" | "failed"; startedAt: string; finishedAt: string | null; error: string | null } | null;
+  result: LeadAIResult | null;
+  /** True when a start joined a job that was already running (nothing new was started). */
+  alreadyRunning?: boolean;
+}
+
+async function inboxAndPeriod(raw: unknown) {
+  const resolved = await scopeAndPeriod(raw);
+  if (!resolved || resolved.data.scope.type !== "inbox") return null;
+  return { inbox: resolved.data.scopeInboxes[0], period: resolved.period };
+}
+
+const jobKey = (inboxId: string, period: { from: string; to: string }) => ({ inboxId, from: period.from, to: period.to, analysisVersion: ANALYSIS_VERSION, model: defaultChatModel().id });
+
+async function stateOf(job: AnalysisJob | null): Promise<InboxAnalysisState> {
+  if (!job) return { job: null, result: null };
+  const shown = effectiveJob(job);
+  const run = shown.status === "completed" && shown.runId ? await getRun(shown.runId) : null;
+  return {
+    job: { id: shown.id, status: shown.status, startedAt: shown.startedAt, finishedAt: shown.finishedAt, error: shown.error },
+    result: run ? await renderStoredRun(run) : null,
+  };
+}
+
+/**
+ * Starts the AI analysis of one inbox as a server-side job (ADR-051) and returns at once: the work runs
+ * after the response, so it continues when the browser goes away. An analysis of the same inbox, period
+ * and method that is already running is joined, never started twice. Used by the Leadanalys page and the
+ * chat alike.
+ */
+export async function startInboxAnalysisAction(raw: unknown): Promise<LeadActionResult<InboxAnalysisState>> {
   const { session } = await requireLeadAccess();
   if (!leadAnalysisExternalAllowed()) return { ok: false, error: "AI-analysen är inte aktiverad i den här miljön." };
-  const resolved = await scopeAndPeriod(raw);
-  if (!resolved || resolved.data.scope.type !== "inbox") return { ok: false, error: "Inkorgen hittades inte." };
-  const { data, period } = resolved;
+  if (!hubSpotConfigured()) return { ok: false, error: hubSpotMessage(new HubSpotError("not_configured")) };
+  const resolved = await inboxAndPeriod(raw);
+  if (!resolved) return { ok: false, error: "Inkorgen hittades inte." };
+  const { inbox, period } = resolved;
   if (daysBetween(period.from, period.to) > MAX_SYNC_DAYS) return { ok: false, error: `Välj en period på högst ${MAX_SYNC_DAYS} dagar.` };
-  const inbox = data.scopeInboxes[0];
-  const store = leadStore();
+  const supabase = await createSupabaseServerClient();
+  let started: { id: string; created: boolean };
   try {
-    // Fresh facts first: the analysis decides from them what has changed.
-    await syncInbox(inbox, period, store, { deadline: Date.now() + 60_000 });
-  } catch (error) {
-    return { ok: false, error: hubSpotMessage(error) };
+    started = await startAnalysisJob(jobKey(inbox.id, period), supabase);
+  } catch {
+    return { ok: false, error: "Analysen kunde inte startas. Försök igen." };
   }
-  const run = await analyseInbox({ inbox, period }, session.user.id, { store });
-  if (!run.ok) return run;
-  await logSecurityEvent("leads.ai_analysis_run", {
-    actorId: session.user.id,
-    targetType: "hubspot_inbox",
-    targetId: inbox.id,
-    metadata: {
-      from: period.from,
-      to: period.to,
-      dialogues: run.result.run.dialoguesAnalysed,
-      analysedNew: run.result.run.analysedNew,
-      reused: run.result.run.reused,
-      model: run.result.run.model,
-      costUsd: run.result.run.costUsd,
-    },
-  });
-  return { ok: true, data: run.result };
+  if (started.created) {
+    // After the response: within the route's max duration, independent of the browser.
+    after(() => runInboxAnalysisJob({ jobId: started.id, inbox, period, userId: session.user.id, supabase }));
+  }
+  const job = await latestAnalysisJob(jobKey(inbox.id, period), supabase);
+  return { ok: true, data: { ...(await stateOf(job)), alreadyRunning: !started.created } };
+}
+
+/** The status of the latest analysis of an inbox and period – read from the database, so it survives reloads. */
+export async function inboxAnalysisStatusAction(raw: unknown): Promise<LeadActionResult<InboxAnalysisState>> {
+  await requireLeadAccess();
+  const resolved = await inboxAndPeriod(raw);
+  if (!resolved) return { ok: false, error: "Inkorgen hittades inte." };
+  try {
+    return { ok: true, data: await stateOf(await latestAnalysisJob(jobKey(resolved.inbox.id, resolved.period))) };
+  } catch {
+    return { ok: false, error: "Status kunde inte hämtas." };
+  }
 }
 
 /** AI's combined reading of a region or all regions, from stored classifications only. */

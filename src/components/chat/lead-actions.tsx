@@ -1,22 +1,27 @@
 "use client";
 
 import { Check, Loader2, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { LeadActionReference } from "@/lib/domain/types";
-import { analyseInboxAction, syncLeadsAction } from "@/server/leads/actions";
+import { inboxAnalysisStatusAction, startInboxAnalysisAction, syncLeadsAction, type InboxAnalysisState } from "@/server/leads/actions";
 
 import { useChatActions } from "./chat-actions";
 
 type StepState = { status: "idle" | "running" | "done" | "error"; message: string | null };
 
+const POLL_MS = 4000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
  * The steps that fill a gap in the lead material (ADR-050): fetch from HubSpot, then analyse the
  * dialogues. Each step runs only when the user clicks it, through the same Leadanalys actions as the
- * Leadanalys page – they check access, the selection and the cost limits again on the server. The chat
- * stays usable while a step runs; when all are done the question can be asked again in the same
- * conversation.
+ * Leadanalys page – they check access, the selection and the cost limits again on the server.
+ *
+ * The analysis runs as a job on the server (ADR-051): the browser starts it and then only reads its
+ * status. Leaving the chat, a reload or a lost connection does not stop it; coming back shows that it is
+ * running or done, and a new click never starts a second analysis of the same inbox and period.
  */
 export function LeadActions({ action }: { action: LeadActionReference }) {
   const chat = useChatActions();
@@ -24,6 +29,58 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   const set = (i: number, s: StepState) => setStates((all) => all.map((x, j) => (j === i ? s : x)));
   const running = states.some((s) => s.status === "running");
   const allDone = states.every((s) => s.status === "done");
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const scopeOf = (inboxId: string) => ({ inboxId, preset: "custom", from: action.scope.from, to: action.scope.to });
+  /** A job that belongs to these steps: started after they were offered. */
+  const ours = (s: InboxAnalysisState | null) => !!s?.job && (!action.createdAt || s.job.startedAt >= action.createdAt);
+
+  async function status(inboxId: string): Promise<InboxAnalysisState | null> {
+    const r = await inboxAnalysisStatusAction(scopeOf(inboxId)).catch(() => null);
+    return r?.ok ? r.data : null;
+  }
+
+  /** Waits until the inbox's job is no longer running – reading the server, never holding a request open. */
+  async function follow(i: number, inboxId: string, label: string): Promise<InboxAnalysisState | null> {
+    for (let missing = 0; ; ) {
+      const s = await status(inboxId);
+      if (!alive.current) return null;
+      if (s && ours(s) && s.job!.status !== "running") return s;
+      // The server answers but has no job of ours: the start never arrived.
+      if (s && !ours(s) && ++missing >= 3) return { job: { id: "", status: "failed", startedAt: "", finishedAt: null, error: "Analysen startade inte. Försök igen." }, result: null };
+      set(i, { status: "running", message: `${label}${s ? "" : " Folke når inte servern just nu och försöker igen."}` });
+      await sleep(POLL_MS);
+    }
+  }
+
+  // Coming back to the conversation: show what the server knows. Running jobs are followed; nothing new
+  // is started without a click.
+  useEffect(() => {
+    action.steps.forEach((step, i) => {
+      if (step.action !== "analyse") return;
+      void (async () => {
+        const all = await Promise.all(step.inboxIds.map(async (id) => [id, await status(id)] as const));
+        if (!alive.current) return;
+        const runningIds = all.filter(([, s]) => ours(s) && s!.job!.status === "running").map(([id]) => id);
+        const done = all.filter(([, s]) => ours(s) && s!.job!.status === "completed").length;
+        if (done === step.inboxIds.length) return set(i, { status: "done", message: "Dialogerna är analyserade." });
+        if (!runningIds.length) return;
+        for (const id of runningIds) await follow(i, id, "Analysen pågår på servern. Du kan lämna chatten – den fortsätter.");
+        const after = await Promise.all(step.inboxIds.map(status));
+        if (!alive.current) return;
+        const finished = after.filter((s) => ours(s) && s!.job!.status === "completed").length;
+        set(i, finished === step.inboxIds.length ? { status: "done", message: "Dialogerna är analyserade." } : { status: "idle", message: `${finished} av ${step.inboxIds.length} inkorgar är analyserade. Klicka för att fortsätta.` });
+      })();
+    });
+    // Once per mounted message.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function sync(i: number) {
     const step = action.steps[i];
@@ -48,20 +105,34 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
     let analysed = 0;
     let left = 0;
     for (const [n, inboxId] of step.inboxIds.entries()) {
-      set(i, { status: "running", message: `Analyserar dialogerna${step.inboxIds.length > 1 ? ` (${n + 1} av ${step.inboxIds.length} inkorgar)` : ""}… Det kan ta ett par minuter. Du kan fortsätta chatta under tiden.` });
-      const result = await analyseInboxAction({ inboxId, preset: "custom", from: action.scope.from, to: action.scope.to }).catch(() => null);
-      if (!result?.ok) {
-        set(i, { status: "error", message: result && !result.ok ? result.error : "Analysen kunde inte genomföras. Försök igen." });
+      const label = `Analyserar dialogerna${step.inboxIds.length > 1 ? ` (${n + 1} av ${step.inboxIds.length} inkorgar)` : ""} på servern. Du kan lämna chatten – den fortsätter.`;
+      set(i, { status: "running", message: "Startar analysen…" });
+      const current = await status(inboxId);
+      let final: InboxAnalysisState | null;
+      if (ours(current) && current!.job!.status === "completed") final = current;
+      else if (ours(current) && current!.job!.status === "running") final = await follow(i, inboxId, label);
+      else {
+        const started = await startInboxAnalysisAction(scopeOf(inboxId)).catch(() => null);
+        if (started && !started.ok) {
+          set(i, { status: "error", message: started.error });
+          return;
+        }
+        if (started?.ok && started.data.alreadyRunning) set(i, { status: "running", message: "En analys av samma inkorg och period pågår redan – Folke startar ingen ny utan väntar på den." });
+        // A lost answer is fine: the job may have started – follow() reads the server.
+        final = await follow(i, inboxId, label);
+      }
+      if (!final) return;
+      if (final.job?.status === "failed") {
+        set(i, { status: "error", message: final.job.error ?? "Analysen kunde inte genomföras. Försök igen." });
         return;
       }
-      analysed += result.data.run.dialoguesAnalysed;
-      left += result.data.notAnalysed.filter((x) => x.reason === "limit" || x.reason === "time_limit").reduce((sum, x) => sum + x.count, 0);
+      analysed += final.result?.run.dialoguesAnalysed ?? 0;
+      left += (final.result?.notAnalysed ?? []).filter((x) => x.reason === "limit" || x.reason === "time_limit").reduce((sum, x) => sum + x.count, 0);
     }
     set(i, {
-      status: "done",
+      status: left ? "idle" : "done",
       message: `${analysed} ${analysed === 1 ? "dialog är analyserad" : "dialoger är analyserade"}.${left ? ` ${left} återstår – klicka igen för att fortsätta.` : ""}`,
     });
-    if (left) setStates((all) => all.map((x, j) => (j === i ? { ...x, status: "idle" } : x)));
   }
 
   return (

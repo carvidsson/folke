@@ -587,3 +587,72 @@ export async function getLeadSettings(given?: SupabaseClient): Promise<{ portalI
   );
   return { portalId: rows[0]?.hubspot_portal_id ?? null, template: rows[0]?.hubspot_thread_url_template ?? null };
 }
+
+// ---------------------------------------------------------------------------
+// AI analysis jobs (ADR-051): status of an inbox analysis that runs on the server
+// ---------------------------------------------------------------------------
+
+export interface AnalysisJob {
+  id: string;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+  heartbeatAt: string;
+  finishedAt: string | null;
+  runId: string | null;
+  error: string | null;
+}
+
+export interface AnalysisJobKey {
+  inboxId: string;
+  from: string;
+  to: string;
+  analysisVersion: string;
+  model: string;
+}
+
+/** Starts a job, or joins the one already running for the same inbox, period and method (the database decides). */
+export async function startAnalysisJob(key: AnalysisJobKey, given?: SupabaseClient): Promise<{ id: string; created: boolean }> {
+  const supabase = await client(given);
+  const rows = unwrap(
+    await supabase.rpc("start_lead_analysis_job", { p_inbox: key.inboxId, p_from: key.from, p_to: key.to, p_version: key.analysisVersion, p_model: key.model }),
+  ) as { id: string; status: string; started_at: string; created: boolean }[] | null;
+  if (!rows?.[0]) throw new Error("lead analysis job: not started");
+  return { id: rows[0].id, created: rows[0].created };
+}
+
+/** Heartbeat ("running") or the end of a job. False when the job is no longer this user's running job. */
+export async function updateAnalysisJob(
+  id: string,
+  update: { status: "running" } | { status: "completed"; runId: string | null } | { status: "failed"; error: string },
+  given?: SupabaseClient,
+): Promise<boolean> {
+  const supabase = await client(given);
+  const { data, error } = await supabase.rpc("update_lead_analysis_job", {
+    p_id: id,
+    p_status: update.status,
+    p_run_id: update.status === "completed" ? update.runId : null,
+    p_error: update.status === "failed" ? update.error : null,
+  });
+  if (error) throw new Error(`lead analysis job: ${error.code}`);
+  return data === true;
+}
+
+/** The latest job for an inbox, period and method that the user may see (RLS). */
+export async function latestAnalysisJob(key: AnalysisJobKey, given?: SupabaseClient): Promise<AnalysisJob | null> {
+  const supabase = await client(given);
+  const rows = unwrap(
+    await supabase
+      .from("lead_analysis_jobs")
+      .select("id, status, started_at, heartbeat_at, finished_at, run_id, error")
+      .eq("hubspot_inbox_id", key.inboxId)
+      .eq("period_from", key.from)
+      .eq("period_to", key.to)
+      .eq("analysis_version", key.analysisVersion)
+      .eq("model", key.model)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .returns<{ id: string; status: AnalysisJob["status"]; started_at: string; heartbeat_at: string; finished_at: string | null; run_id: string | null; error: string | null }[]>(),
+  );
+  const r = rows[0];
+  return r ? { id: r.id, status: r.status, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, finishedAt: r.finished_at, runId: r.run_id, error: r.error } : null;
+}

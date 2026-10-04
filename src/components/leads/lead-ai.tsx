@@ -27,13 +27,13 @@ import {
   type RunSummaryInfo,
 } from "@/lib/leads/types";
 import {
-  analyseInboxAction,
   openRunAction,
   summariseScopeAction,
 } from "@/server/leads/actions";
 
 import type { EvidenceRequest } from "./evidence-sheet";
 import { SellerCoaching } from "./seller-coaching";
+import { useInboxAnalysis } from "./use-inbox-analysis";
 import {
   Bars,
   BehaviourRow,
@@ -87,16 +87,30 @@ export function LeadAI({
   const [viewingEarlier, setViewingEarlier] = useState(false);
   const router = useRouter();
   const historical = Boolean(shown) && viewingEarlier;
+  // The inbox analysis runs as a job on the server (ADR-051): its status survives reloads and leaving the page.
+  const analysis = useInboxAnalysis(
+    scopeType === "inbox" && scope.inboxId && scope.from && scope.to ? { inboxId: scope.inboxId, preset: "custom", from: scope.from, to: scope.to } : null,
+    {
+      // A job that finishes while the page is open: show its result and refresh the figures.
+      onCompleted: (result) => {
+        setShown(result);
+        setViewingEarlier(false);
+        router.refresh();
+      },
+    },
+  );
+  const job = analysis.view;
+  const jobBusy = job.status === "starting" || job.status === "running";
   const outdated = state.eligible - state.upToDate;
 
   function run() {
     setError(null);
+    if (scopeType === "inbox") {
+      void analysis.start();
+      return;
+    }
     start(async () => {
-      const result = await (
-        scopeType === "inbox"
-          ? analyseInboxAction(scope)
-          : summariseScopeAction(scope)
-      ).catch(() => null);
+      const result = await summariseScopeAction(scope).catch(() => null);
       if (result?.ok) {
         setShown(result.data);
         setViewingEarlier(false);
@@ -220,15 +234,27 @@ export function LeadAI({
           {allowed && (
             <Button
               onClick={run}
-              disabled={pending}
+              disabled={pending || jobBusy}
               className="shrink-0"
               variant={shown && outdated === 0 ? "outline" : "default"}
             >
               {shown ? <RefreshCw /> : <Sparkles />}
-              {pending && !openingRun ? "Analyserar…" : actionLabel}
+              {(pending && !openingRun) || jobBusy ? "Analyserar…" : actionLabel}
             </Button>
           )}
         </div>
+        {scopeType === "inbox" && job.status === "starting" && (
+          <p role="status" className="mt-3 text-sm text-muted-foreground">
+            Startar analysen…
+          </p>
+        )}
+        {scopeType === "inbox" && job.status === "running" && (
+          <p role="status" className="mt-3 text-sm text-muted-foreground">
+            {job.alreadyRunning ? "En analys av samma inkorg och period pågår redan – Folke startar ingen ny, utan visar den här när den är klar. " : "Analysen pågår på servern. "}
+            Du kan lämna sidan, byta app eller låsa telefonen – den fortsätter, och resultatet visas här när du kommer tillbaka.
+            {job.unreachable && " Folke når inte servern just nu och försöker igen."}
+          </p>
+        )}
         {!enabled && (
           <p className="mt-3 text-xs text-muted-foreground">
             AI-analysen är avstängd i den här miljön.
@@ -241,10 +267,10 @@ export function LeadAI({
         )}
       </Panel>
 
-      {error && (
+      {(error || (scopeType === "inbox" && job.status === "failed" && job.error)) && (
         <Alert variant="destructive" className="mt-4">
           <AlertTriangle />
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{error ?? job.error}</AlertDescription>
         </Alert>
       )}
 

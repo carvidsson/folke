@@ -30,6 +30,8 @@ export interface GapInput {
   maxDays: number;
   /** Stockholm date: today alone not being fetched yet is not a gap worth a step. */
   today: string;
+  /** ISO time the steps are offered (stored with them). */
+  createdAt?: string;
 }
 
 export interface Gaps {
@@ -96,7 +98,7 @@ export function findGaps(input: GapInput): Gaps {
     });
   }
   const action: LeadActionReference | null = steps.length
-    ? { kind: "lead_action", id: "action", steps, scope: { ...input.scope, preset: "custom", from: period.from, to: period.to }, question: input.question }
+    ? { kind: "lead_action", id: "action", steps, scope: { ...input.scope, preset: "custom", from: period.from, to: period.to }, question: input.question, ...(input.createdAt ? { createdAt: input.createdAt } : {}) }
     : null;
 
   // --- Deterministic answers: nothing useful can be said without the step -------

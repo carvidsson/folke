@@ -163,6 +163,7 @@ export async function handleLeadChat({
     canAnalyse: leadAnalysisExternalAllowed(),
     maxDays: MAX_SYNC_DAYS,
     today,
+    createdAt: now.toISOString(),
   });
   const actionSources: MessageSource[] = gaps.action ? [gaps.action] : [];
 

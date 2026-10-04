@@ -151,6 +151,7 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Fråga Folke på Leadanalys-sidan (urval och per säljare) | ✅ |
 | Verifierade fakta mellan turerna, mönster → underlag på servern | ✅ |
 | Saknat underlag: Uppdatera från HubSpot / Analysera dialogerna direkt i chatten | ✅ |
+| AI-analysen som serverjobb: överlever att sidan lämnas, ingen dubbelstart, status från servern (ADR-051, migration `20261015090000`) | ✅ folke-dev. Inte folke – väntar på godkännande. |
 | Migration `20261014090000` | folke-dev. Inte folke – väntar på godkännande. |
 | Betan | Inte släppt – väntar på granskning. |
 | Senare | Fler frågetyper (bilar och märken, inflöde per veckodag), per säljare över tid och utvärdering mot fler formuleringar. |

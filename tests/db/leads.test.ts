@@ -463,6 +463,87 @@ describe("lead access per group, user and region", () => {
       expect((await tx.query(`select 1 from public.lead_inboxes where hubspot_inbox_id like '8000%'`)).rows).toHaveLength(0);
     });
   });
+  // --- AI analysis as a server-side job (ADR-051) ----------------------------
+  const startJob = (tx: Transaction, inbox: string) =>
+    tx.query<{ id: string; status: string; created: boolean }>(
+      `select * from public.start_lead_analysis_job($1, '2026-09-01', '2026-09-30', 'lead-ai-3.1', 'gpt-6-luna')`,
+      [inbox],
+    );
+  const updateJob = async (tx: Transaction, id: string, status: string, runId: string | null = null) =>
+    (await tx.query<{ ok: boolean }>(`select public.update_lead_analysis_job($1, $2, $3) as ok`, [id, status, runId])).rows[0].ok;
+  /** Runs `sql` as the table owner inside the same transaction, then continues as `user`. */
+  async function asOwner<T>(tx: Transaction, user: string, fn: () => Promise<T>): Promise<T> {
+    await tx.exec("reset role");
+    const result = await fn();
+    const now = Math.floor(Date.now() / 1000);
+    await tx.query("select set_config('request.jwt.claims', $1, true)", [
+      JSON.stringify({ sub: user, role: "authenticated", aal: "aal2", amr: [{ method: "password", timestamp: now }, { method: "totp", timestamp: now }] }),
+    ]);
+    await tx.exec("set local role authenticated");
+    return result;
+  }
+
+  it("analysis jobs: one running job per inbox, period and method – a second start joins it (ADR-051)", async () => {
+    await withSetup(U.seller, async (tx) => {
+      const first = (await startJob(tx, "800001")).rows[0];
+      expect(first).toMatchObject({ status: "running", created: true });
+      const again = (await startJob(tx, "800001")).rows[0];
+      expect(again).toMatchObject({ id: first.id, created: false });
+      expect((await tx.query(`select 1 from public.lead_analysis_jobs where hubspot_inbox_id = '800001'`)).rows).toHaveLength(1);
+      // Another region's inbox: refused; and nobody writes the table directly.
+      await expectDenied(tx, `select * from public.start_lead_analysis_job('800002', '2026-09-01', '2026-09-30', 'lead-ai-3.1', 'gpt-6-luna')`);
+      await expectDenied(tx, `insert into public.lead_analysis_jobs (hubspot_inbox_id, period_from, period_to, analysis_version, model) values ('800001', '2026-08-01', '2026-08-31', 'lead-ai-3.1', 'gpt-6-luna')`);
+      await expectDenied(tx, `update public.lead_analysis_jobs set status = 'completed' where id = '${first.id}'`);
+      await expectDenied(tx, `delete from public.lead_analysis_jobs where id = '${first.id}'`);
+    });
+  });
+
+  it("analysis jobs: only the starter reports, only with a run of the same inbox; a finished job allows a new one", async () => {
+    await withSetup(U.seller, async (tx) => {
+      const job = (await startJob(tx, "800001")).rows[0];
+      const runs = await asOwner(tx, U.seller, async () =>
+        (await tx.query<{ id: string; hubspot_inbox_id: string }>(`select id, hubspot_inbox_id from public.lead_analysis_runs where scope_type = 'inbox'`)).rows,
+      );
+      const own = runs.find((r) => r.hubspot_inbox_id === "800001")!.id;
+      const other = runs.find((r) => r.hubspot_inbox_id === "800002")!.id;
+      expect(await updateJob(tx, job.id, "running")).toBe(true);
+      expect(await updateJob(tx, job.id, "completed", other)).toBe(false);
+      // Someone else (all regions) cannot finish it.
+      await asOwner(tx, U.loner, async () => undefined);
+      expect(await updateJob(tx, job.id, "failed")).toBe(false);
+      await asOwner(tx, U.seller, async () => undefined);
+      expect(await updateJob(tx, job.id, "completed", own)).toBe(true);
+      expect((await tx.query<{ status: string; run_id: string }>(`select status, run_id from public.lead_analysis_jobs where id = '${job.id}'`)).rows[0]).toEqual({ status: "completed", run_id: own });
+      // Done: a finished job is not reopened, and the next start is a new job.
+      expect(await updateJob(tx, job.id, "running")).toBe(false);
+      const next = (await startJob(tx, "800001")).rows[0];
+      expect(next.created).toBe(true);
+      expect(next.id).not.toBe(job.id);
+    });
+  });
+
+  it("analysis jobs: a job that stopped reporting is failed by the next start, which then starts anew", async () => {
+    await withSetup(U.seller, async (tx) => {
+      const stuck = (await startJob(tx, "800001")).rows[0];
+      await asOwner(tx, U.seller, () => tx.query(`update public.lead_analysis_jobs set heartbeat_at = now() - interval '10 minutes', started_at = now() - interval '10 minutes' where id = $1`, [stuck.id]));
+      const fresh = (await startJob(tx, "800001")).rows[0];
+      expect(fresh.created).toBe(true);
+      const old = (await tx.query<{ status: string; error: string }>(`select status, error from public.lead_analysis_jobs where id = '${stuck.id}'`)).rows[0];
+      expect(old).toEqual({ status: "failed", error: "Analysen avbröts innan den blev klar." });
+    });
+  });
+
+  it("analysis jobs: users without access see none, region users only their region's", async () => {
+    await withSetup(U.loner, async (tx) => {
+      await startJob(tx, "800002");
+      await asOwner(tx, U.seller, async () => undefined);
+      expect((await tx.query(`select 1 from public.lead_analysis_jobs where hubspot_inbox_id = '800002'`)).rows).toHaveLength(0);
+      await asOwner(tx, U.mechanic, async () => undefined);
+      expect((await tx.query(`select 1 from public.lead_analysis_jobs`)).rows).toHaveLength(0);
+      await expectDenied(tx, `select * from public.start_lead_analysis_job('800001', '2026-09-01', '2026-09-30', 'lead-ai-3.1', 'gpt-6-luna')`);
+    });
+  });
+
   // --- Leadanalys in the chat (ADR-050) ------------------------------------
   const leadAssistant = "(select id from public.assistants where slug = 'leadanalys')";
 

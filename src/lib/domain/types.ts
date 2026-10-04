@@ -248,6 +248,8 @@ export interface LeadActionReference {
   steps: { action: "sync" | "analyse"; label: string; detail: string; inboxIds: string[] }[];
   scope: { regionId: string | null; inboxId: string | null; preset: "custom"; from: string; to: string };
   question: string;
+  /** When the steps were offered: an analysis job started after this belongs to them (ADR-051). */
+  createdAt?: string;
 }
 
 /** Everything an assistant answer can show under it: document excerpts, or (Leadanalys) leads, lead sets, the basis and actions. */
