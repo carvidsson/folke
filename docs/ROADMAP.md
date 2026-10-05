@@ -154,6 +154,7 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | AI-analysen som serverjobb: överlever att sidan lämnas, ingen dubbelstart, status från servern (ADR-051, migration `20261015090000`) | ✅ |
 | Vad kunderna frågar efter: behov, köpsignaler, förfrågningar och när bilen inte gick att få, med kombinationer, korsning med källa och Virtuell och klickbart underlag, i Leadanalys och i chatten (ADR-052, migration `20261016090000`) | ✅ folke-dev |
 | AI-analys per ort i ett klick med förlopp ("3 av 5 inkorgar"), aktuella analyser återanvänds. Alla leads visar bara hårda data. "Gör sammanvägning" är borttagen (ADR-053) | ✅ folke-dev |
+| Leadanalys-chatten förstår naturliga följdfrågor: planerare (gpt-6-luna, strikt schema, pseudonymiserat) som servern validerar, samtalstillstånd med urval, mål och väntande steg, naturliga perioder, en gemensam analysstatus, steg i samma samtal som fortsätter till svaret (ADR-054) | ✅ |
 | Säljaranalys i chatten: kvalitativa frågor om en säljare, analysknapp för bara säljarens inkorgar, "Kan du analysera dessa?", ingen undre gräns för underlag och ingången "Jag vill veta mer om en säljare" (ADR-053) | ✅ |
 | Migration `20261014090000` | folke-dev. Inte folke – väntar på godkännande. |
 | Betan | Inte släppt – väntar på granskning. |

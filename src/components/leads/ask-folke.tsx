@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { setPendingPrompt } from "@/lib/chat/pending-prompt";
-import type { LeadChatContext } from "@/lib/leads/chat";
+import type { LeadChatContext, LeadTurn } from "@/lib/leads/chat";
 
 /**
  * "Fråga Folke" (ADR-050): opens a new chat with the Leadanalys assistant, starting from the page's
@@ -19,8 +19,8 @@ export const SELLER_INTRO_PROMPT = "Jag vill veta mer om en säljare";
 export function useAskFolke(assistantSlug: string | null) {
   const router = useRouter();
   if (!assistantSlug) return null;
-  return (text: string, context: LeadChatContext) => {
-    setPendingPrompt({ text, attachments: [], leadContext: context });
+  return (text: string, context: LeadChatContext, leadTurn?: LeadTurn) => {
+    setPendingPrompt({ text, attachments: [], leadContext: context, ...(leadTurn ? { leadTurn } : {}) });
     router.push(`/chat?assistant=${encodeURIComponent(assistantSlug)}`);
   };
 }
@@ -50,7 +50,7 @@ export function AskFolkeMenu({ assistantSlug, scopeName, context }: { assistantS
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => ask(SELLER_INTRO_PROMPT, context)}>
+        <DropdownMenuItem onSelect={() => ask(SELLER_INTRO_PROMPT, context, { kind: "seller_intro" })}>
           <UserRound className="size-4" />
           {SELLER_INTRO_PROMPT}
         </DropdownMenuItem>

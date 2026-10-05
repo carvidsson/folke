@@ -24,6 +24,7 @@ import type { ExampleRequest } from "./intent";
 import { formatMinutes, MetricRegistry, POPULATIONS, renderMetric, type Metric } from "./metrics";
 import { NEEDS_MENTIONS, needsModule } from "./needs-brief";
 import { aliasSellerTokens, neutralizeStoredAliases, type Pseudonyms } from "./pseudonyms";
+import type { SelectionStatus } from "./status";
 
 /**
  * The lead brief (ADR-050): a small, deterministic material for one question, built from data stored
@@ -40,6 +41,28 @@ const SMALL_GROUP = 10;
 /** Below this many AI-analysed dialogues no pattern should be drawn. */
 const MIN_ANALYSED = 10;
 const PATTERN_EXAMPLES = 2;
+
+/**
+ * The status of the selection as the server counted it (status.ts), with the step it offers. The model
+ * learns from this what Folke can do – it never has to guess, and never tells the user to fetch or send
+ * material themselves.
+ */
+function statusSection(status: SelectionStatus, sellerAlias: string | null, next: { label: string; detail: string } | null, hide: (t: string) => string): string {
+  const d = status.data;
+  const fetched = d.notFetched ? "Inget är hämtat för perioden ännu." : d.fetchInboxIds.length ? `Perioden är inte hämtad i sin helhet för ${d.fetchInboxIds.length} ${d.fetchInboxIds.length === 1 ? "inkorg" : "inkorgar"}.` : "Hela perioden är hämtad.";
+  const who = sellerAlias ? ` där ${sellerAlias} gav första svaret` : "";
+  const needs = status.requires.dialogues || status.requires.needs ? [status.requires.dialogues ? "AI-analys av dialogerna" : null, status.requires.needs ? "behovsanalys" : null].filter(Boolean).join(" och ") : "bara HubSpot-fakta";
+  const lines = [
+    `- Hämtat från HubSpot: ${fetched}`,
+    `- Dialoger med registrerat säljsvar${who}: ${status.dialogues.relevant}. Med aktuell AI-analys: ${status.dialogues.current}. Saknar aktuell analys: ${status.dialogues.missing}.`,
+    `- Leads med meddelande från kunden${sellerAlias ? ` (${sellerAlias})` : ""}: ${status.needs.relevant}. Med aktuell behovsanalys: ${status.needs.current}. Saknar: ${status.needs.missing}.`,
+    `- Frågan behöver: ${needs}.`,
+    next
+      ? `- Möjlig åtgärd: "${next.label}" – ${hide(next.detail)} Den finns som en knapp under svaret. Användaren startar den med ett klick; när den är klar fortsätter Folke med frågan.`
+      : "- Ingen åtgärd behövs: underlaget räcker för frågan.",
+  ];
+  return `## Status för urvalet (räknat av servern)\n${lines.join("\n")}\nDet här är det enda som gäller om vad som är hämtat och analyserat. Säg aldrig emot det, och säg aldrig att Folke inte kan hämta eller analysera.`;
+}
 
 export function modulesFor(intents: LeadIntent[], seller: boolean): Set<ModuleId> {
   const m = new Set<ModuleId>(["header"]);
@@ -157,6 +180,10 @@ export interface BriefInput {
   earlierFacts?: VerifiedFact[];
   /** A short note that the user can fill a gap with a button under the answer (never started by Folke). */
   actionNote?: string | null;
+  /** What is fetched and analysed for the selection (status.ts) – the only truth the answer may use about it. */
+  status?: SelectionStatus | null;
+  /** The step the server offers under the answer, if any (label and description; names are hidden here). */
+  nextStep?: { label: string; detail: string } | null;
   /** Findings of a stored combined analysis for exactly this selection and period, if any. */
   runFindings: { title: string; text: string; kind: string; threadIds: string[] }[] | null;
   pseudonyms: Pseudonyms;
@@ -705,6 +732,7 @@ export function buildBrief(input: BriefInput): Brief {
   const facts = currentFacts(reg.all, { selection: selectionLabel, period: periodText, scope: { regionId: input.state.regionId, inboxId: input.state.inboxId, sellerId: input.state.sellerId } }, pseudonyms.reveal);
   const earlier = input.earlierFacts?.length ? earlierFactsSection(input.earlierFacts, facts, pseudonyms.hide) : null;
   if (earlier) sections.push(earlier);
+  if (input.status) sections.push(statusSection(input.status, seller ? sellerAlias : null, input.nextStep ?? null, pseudonyms.hide));
   if (input.actionNote) sections.push(`## Åtgärd som användaren kan välja\n- ${input.actionNote} Nämn det kort om det hjälper. Starta inget själv och skriv inga länkar.`);
 
   // --- Basis (shown under the answer, written by the server) ---------------

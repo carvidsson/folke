@@ -1,3 +1,5 @@
+import type { LeadTurn } from "@/lib/leads/chat";
+
 /**
  * Core domain model for Folke.
  *
@@ -251,6 +253,10 @@ export interface LeadActionReference {
   question: string;
   /** When the steps were offered: an analysis job started after this belongs to them (ADR-051). */
   createdAt?: string;
+  /** The conversation's pending step: when it is done, the chat continues towards the goal with it. */
+  pendingId?: string;
+  /** The goal question the chat continues with after the step. */
+  goal?: string;
 }
 
 /**
@@ -261,6 +267,8 @@ export interface LeadPromptsReference {
   kind: "lead_prompts";
   id: string;
   prompts: string[];
+  /** The structured turn each prompt sends (same order): no interpretation needed for a click. */
+  turns?: LeadTurn[];
 }
 
 /** Everything an assistant answer can show under it: document excerpts, or (Leadanalys) leads, lead sets, the basis, actions and suggested questions. */

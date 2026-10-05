@@ -44,6 +44,17 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   const running = states.some((s) => s.status === "running");
   const allDone = states.every((s) => s.status === "done");
   const alive = useRef(true);
+  // The user clicked a step here (not a step found done on a later visit): when it is done, the chat goes
+  // on towards the goal by itself (2026-10-06) – the server checks the material again and either offers
+  // the next step or answers the question.
+  const clicked = useRef(false);
+  const continued = useRef(false);
+  const continueText = `Fortsätt: ${action.goal ?? action.question}`.slice(0, 600);
+  useEffect(() => {
+    if (!allDone || !clicked.current || continued.current || !chat || chat.busy || !action.pendingId) return;
+    continued.current = true;
+    chat.ask(continueText, { kind: "continue", pendingId: action.pendingId });
+  }, [allDone, chat, action.pendingId, continueText]);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -116,6 +127,7 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   }, []);
 
   async function sync(i: number) {
+    clicked.current = true;
     const step = action.steps[i];
     let remaining: string[] | undefined = step.inboxIds;
     let done = 0;
@@ -182,6 +194,7 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   }
 
   async function analyse(i: number) {
+    clicked.current = true;
     if (batch) return analyseRegion(i);
     const step = action.steps[i];
     let analysed = 0;
@@ -261,10 +274,16 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
       </ol>
       {allDone && chat && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-sm">
-          <span className="text-muted-foreground">Underlaget är uppdaterat.</span>
-          <Button size="sm" variant="outline" disabled={chat.busy} onClick={() => chat.ask(action.question)}>
+          <span className="text-muted-foreground">{action.pendingId && continued.current ? "Underlaget är uppdaterat – Folke fortsätter med frågan." : "Underlaget är uppdaterat."}</span>
+          {/* Fallback when the chat did not go on by itself (a later visit, or an answer from before 2026-10-06). */}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={chat.busy}
+            onClick={() => (action.pendingId ? chat.ask(continueText, { kind: "continue", pendingId: action.pendingId }) : chat.ask(action.question))}
+          >
             <RefreshCw className="size-4" />
-            Ställ frågan igen
+            {action.pendingId ? "Fortsätt" : "Ställ frågan igen"}
           </Button>
         </div>
       )}

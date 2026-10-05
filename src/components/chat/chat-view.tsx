@@ -19,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { takePendingPrompt } from "@/lib/chat/pending-prompt";
+import type { LeadTurn } from "@/lib/leads/chat";
 import { listConversationAttachmentsAction } from "@/server/attachments/actions";
 import type { Assistant, ConversationDataClass, Message } from "@/lib/domain/types";
 
@@ -59,10 +60,12 @@ export function ChatView({
     conversationId: conversation?.id ?? null,
     initialMessages: conversation?.messages,
     mode: synthetic ? "synthetic" : "standard",
+    interpreting: isLead,
   });
   const { messages, status, isBusy, send } = chat;
   // "Ställ frågan igen" after a Leadanalys step (ADR-050): same conversation, same composer state.
-  const chatActions = useMemo(() => ({ ask: (text: string) => send({ text, attachments: [] }), busy: isBusy }), [send, isBusy]);
+  // Leadanalys suggestions and continuations send a structured turn with the text (ADR-050, 2026-10-06).
+  const chatActions = useMemo(() => ({ ask: (text: string, leadTurn?: LeadTurn) => send({ text, attachments: [], ...(leadTurn ? { leadTurn } : {}) }), busy: isBusy }), [send, isBusy]);
   const isEmpty = messages.length === 0;
 
   // Prompt handed over from the start page's quick-start box.

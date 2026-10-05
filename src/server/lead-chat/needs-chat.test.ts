@@ -323,15 +323,15 @@ describe("needs gaps", () => {
 
   it("nothing analysed: explains it and offers the analysis (never starts it)", () => {
     const g = findGaps({ ...base, needs: new Map() });
-    expect(g.answer).toMatch(/kundbehoven är inte analyserade ännu \(2 leads med meddelande från kunden\)/);
-    expect(g.action?.steps).toMatchObject([{ action: "analyse", label: "Analysera dialogerna", inboxIds: ["100"] }]);
+    expect(g.answer).toMatch(/^Jag hittade 2 leads med meddelande från kunden .*Kundbehoven är inte analyserade ännu, så de behöver analyseras innan jag kan svara\. Klicka på "Analysera 2 leads"/);
+    expect(g.action?.steps).toMatchObject([{ action: "analyse", label: "Analysera 2 leads", inboxIds: ["100"] }]);
     expect(g.action?.steps[0].detail).toMatch(/^Kundbehoven i 2 leads/);
   });
 
   it("partly analysed: Folke answers and the step is offered under the answer", () => {
     const g = findGaps({ ...base, needs: new Map([["1", labels({})]]) });
     expect(g.answer).toBeNull();
-    expect(g.note).toMatch(/Kundbehoven är inte analyserade för 1 av 2 leads/);
+    expect(g.note).toMatch(/Kundbehoven saknar aktuell analys för 1 av 2 leads/);
   });
 
   it("AI off: no step, a plain answer", () => {

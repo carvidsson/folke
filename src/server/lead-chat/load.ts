@@ -23,9 +23,10 @@ import { NEEDS_VERSION } from "@/server/leads/needs";
 import { startOfStockholmDate, stockholmTime } from "@/server/leads/business-hours";
 import { coverage } from "@/server/leads/coverage";
 
-import { modulesFor, needsAnalyses, type BriefInput } from "./brief";
+import { modulesFor, type BriefInput } from "./brief";
 import type { ExampleRequest } from "./intent";
 import type { Pseudonyms } from "./pseudonyms";
+import { isCurrentAnalysis, isCurrentNeeds } from "./status";
 import type { LeadEntities } from "./scope";
 
 /**
@@ -93,7 +94,7 @@ export interface LoadedSelection {
 
 export async function loadSelection(
   supabase: SupabaseClient,
-  args: { state: LeadChatState; intents: BriefInput["intents"]; examples: ExampleRequest | null; entities: LeadEntities; today: string },
+  args: { state: LeadChatState; intents: BriefInput["intents"]; examples: ExampleRequest | null; entities: LeadEntities; today: string; now?: Date },
 ): Promise<LoadedSelection> {
   const { state, entities, today } = args;
   const inbox = state.inboxId ? entities.inboxes.find((i) => i.id === state.inboxId) : null;
@@ -125,9 +126,12 @@ export async function loadSelection(
   const rowsMs = Date.now() - t0;
 
   const t1 = Date.now();
+  // The stored analyses are always read (one query each): the status of the selection (status.ts) needs
+  // them for every question, and only current ones are kept – the one definition the whole chat uses.
+  const now = args.now ?? new Date();
   let analyses: Map<string, StoredAnalysis> | null = null;
   let runFindings: BriefInput["runFindings"] = null;
-  if (needsAnalyses(modules)) {
+  {
     const eligible = rows.filter((r) => r.status === "registered_reply" && r.sellerMessages > 0 && (!seller || r.responderId === seller.id || r.ownerId === seller.id));
     const [loaded, runs] = await Promise.all([
       leadStore(supabase).loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, defaultChatModel().id),
@@ -136,16 +140,19 @@ export async function loadSelection(
         ? listRuns({ type: scopeType, inboxId: inbox?.id ?? null, regionId: region?.id ?? null }, supabase)
         : Promise.resolve([]),
     ]);
-    analyses = loaded;
+    const byThread = new Map(eligible.map((r) => [r.threadId, r]));
+    analyses = new Map([...loaded].filter(([threadId, a]) => isCurrentAnalysis(byThread.get(threadId)!, a, now)));
     const run = runs.find((r) => r.from === period.from && r.to === period.to && r.analysisVersion === ANALYSIS_VERSION && r.summary && "findings" in r.summary);
     runFindings = run ? (run.summary as AISummary).findings.map((f) => ({ title: f.title, text: f.text, kind: f.kind, threadIds: f.threadIds })) : null;
   }
   // lead-needs-1 (ADR-052): every lead with a customer message (also without a seller reply).
   let needs: Map<string, StoredNeeds> | null = null;
-  if (modules.has("needs")) {
+  {
     const candidates = rows.filter((r) => r.customerMessages > 0 && (!seller || r.responderId === seller.id || r.ownerId === seller.id));
+    const byThread = new Map(candidates.map((r) => [r.threadId, r]));
     needs = await leadStore(supabase)
       .loadNeeds(candidates.map((r) => r.threadId), NEEDS_VERSION, defaultChatModel().id)
+      .then((all) => new Map([...all].filter(([threadId, n]) => isCurrentNeeds(byThread.get(threadId)!, n))))
       .catch(() => {
         console.error("[chat/lead] stored needs could not be read");
         return null;

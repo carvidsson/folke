@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { MessageSource } from "@/lib/domain/types";
-import { leadChatContextSchema } from "@/lib/leads/chat";
+import { leadChatContextSchema, leadTurnSchema } from "@/lib/leads/chat";
 
 /**
  * Wire protocol between the chat UI and POST /api/chat.
@@ -32,6 +32,11 @@ export const chatRequestSchema = z.object({
    * server re-resolves it against the user's lead access, and it never widens what may be read.
    */
   leadContext: leadChatContextSchema.optional(),
+  /**
+   * Leadanalys: a click that needs no interpretation (continuation after a step, seller intro, a chosen
+   * seller, a suggested question). Validated and re-resolved on the server like the text.
+   */
+  leadTurn: leadTurnSchema.optional(),
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;

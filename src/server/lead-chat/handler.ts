@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChatRequest, ChatStreamEvent } from "@/lib/chat/protocol";
 import type { Assistant, LeadActionReference, LeadPromptsReference, LeadSetReference, LeadSourceReference, MessageSource, VerifiedFact } from "@/lib/domain/types";
 import { periodLabel } from "@/lib/leads/periods";
-import { leadChatStateSchema, type LeadChatState } from "@/lib/leads/chat";
+import { leadChatStateSchema, type LeadChatState, type LeadPending, type LeadTurn } from "@/lib/leads/chat";
 import { getAIProvider } from "@/server/ai";
 import { stripCitationMarkers, verifyCitations } from "@/server/ai/citations";
 import { userMessageFor } from "@/server/ai/errors";
@@ -24,15 +24,15 @@ import { myLeadAccess } from "@/server/data/leads";
 import { hubSpotConfigured } from "@/server/leads/hubspot";
 import { MAX_SYNC_DAYS } from "@/server/leads/service";
 
-import { buildBrief, needsAnalyses, modulesFor, type Brief } from "./brief";
+import { buildBrief, type Brief } from "./brief";
 import { usedFacts, visibleFacts } from "./facts";
-import { findGaps, genitive } from "./gaps";
-import { parseQuestion } from "./intent";
+import { findGaps, genitive, nextStepText } from "./gaps";
 import { loadEntities, loadSelection, stockholmToday } from "./load";
 import { buildLeadSystemPrompt } from "./prompt";
 import { assertNoIdentifiers, pseudonymsFor, streamRevealer } from "./pseudonyms";
 import { NO_INBOXES, NO_LEAD_ACCESS, outOfScopeAnswer } from "./respond";
-import { resolveTurn } from "./scope";
+import { fromContext, validState, type resolveTurn } from "./scope";
+import { interpretTurn, reuse, sameSelection } from "./turn";
 
 /**
  * POST /api/chat for the Leadanalys assistant (ADR-050). Same protocol, storage and limits as the
@@ -105,14 +105,18 @@ export async function handleLeadChat({
   const today = stockholmToday();
   const now = new Date();
   const entities = await loadEntities(supabase, today);
-  const previous = leadChatStateSchema.safeParse(conversation.lead_context);
-  const turn = resolveTurn({
-    text: message.content,
-    today,
-    entities,
-    previous: previous.success ? previous.data : null,
-    context: created ? (parsed.leadContext ?? null) : null,
-  });
+  const pseudonyms = pseudonymsFor(entities.sellers, entities.knownNames);
+  const stored = leadChatStateSchema.safeParse(conversation.lead_context);
+  const previousState = stored.success ? stored.data : null;
+  const context = created ? (parsed.leadContext ?? null) : null;
+  // The selection the turn starts from: the conversation's (as far as the user can still see it), or the page's.
+  const base = validState(previousState, entities) ?? fromContext(context, entities, today);
+
+  // --- What the message means ---------------------------------------------------------
+  // A structured click needs no interpretation; free text goes to the planner (validated here), and to
+  // the rule-based reading if the planner is off, slow or wrong.
+  const interpretation = await interpretTurn({ parsed, base, previousState, context, entities, pseudonyms, today, now, userId, assistantId: assistant.id, conversationId: conversation.id, supabase });
+  const turn = interpretation.turn;
 
   const { data: storedMessage, error: insertError } = await supabase
     .from("messages")
@@ -131,62 +135,81 @@ export async function handleLeadChat({
     provider,
     model,
   });
+  const turnLog = { via: interpretation.via, ...(interpretation.planner ?? {}) };
 
   // --- Answers without AI ----------------------------------------------------
   const fixedAnswer = async (content: string, state: LeadChatState | null, sources: MessageSource[] = [], log: Record<string, unknown> = {}) => {
     const { error } = await supabase.from("messages").insert({ conversation_id: conversation.id, role: "assistant", content, sources });
     if (error) console.error("[api/chat/lead] could not store answer", error.message);
     if (state) await saveState(supabase, conversation.id, state);
-    console.info("[chat/lead]", JSON.stringify({ conversation: conversation.id, provider: "none", ms: Date.now() - started, ...log }));
+    console.info("[chat/lead]", JSON.stringify({ conversation: conversation.id, provider: "none", ms: Date.now() - started, ...turnLog, ...log }));
     return ndjson([conversationEvent("mock", null), { type: "text", delta: content }, { type: "done", content, sources }]);
   };
 
   if (!entities.inboxes.length) return fixedAnswer(NO_INBOXES, null, [], { kind: "no_inboxes" });
   if (turn.kind === "clarify" || turn.kind === "not_found") return fixedAnswer(turn.text, turn.state, [], { kind: turn.kind });
   if (turn.kind === "out_of_scope") return fixedAnswer(outOfScopeAnswer(turn.topic), turn.state, [], { kind: "out_of_scope", topic: turn.topic });
+  if (turn.request === "decline") {
+    return fixedAnswer("Okej, jag varken hämtar eller analyserar något. Fråga gärna något annat om urvalet.", { ...turn.state, pending: null }, [], { kind: "decline" });
+  }
 
-  const loaded = await loadSelection(supabase, { state: turn.state, intents: turn.intents, examples: turn.examples, entities, today });
-  const pseudonyms = pseudonymsFor(entities.sellers, entities.knownNames);
-  const state = loaded.input.state;
+  const loaded =
+    interpretation.prefetch && sameSelection(interpretation.prefetch.input.state, turn.state)
+      ? reuse(interpretation.prefetch, turn)
+      : await loadSelection(supabase, { state: turn.state, intents: turn.intents, examples: turn.examples, entities, today, now });
   const seller = loaded.input.seller;
 
   // "Jag vill veta mer om en säljare" (Fråga Folke): choose a seller, then what to ask – without AI.
   if (turn.request === "seller_intro") {
     const intro = sellerIntro(loaded.input, entities.sellers);
-    return fixedAnswer(intro.text, { ...state, intents: [] }, intro.prompts ? [intro.prompts] : [], { kind: "seller_intro", seller: !!seller });
+    return fixedAnswer(intro.text, { ...loaded.input.state, intents: [], goal: null, pending: null }, intro.prompts ? [intro.prompts] : [], { kind: "seller_intro", seller: !!seller });
   }
-  // "Kan du analysera dessa?": the step for exactly the previous question's selection, and after the
-  // analysis "Ställ frågan igen" asks that question – not this one.
-  const original = turn.request === "analyse" ? await previousQuestion(supabase, conversation.id, storedMessage.id) : null;
 
-  // Missing material: why, and the steps the user can choose (never started by Folke).
+  // Missing material: the status of the selection (one definition, status.ts) and the next step.
+  const goal = loaded.input.state.goal ?? null;
   const gaps = findGaps({
     selection: loaded.input.selection,
     scopeInboxes: loaded.input.inboxes,
     coverage: loaded.input.coverage,
     rows: loaded.input.rows,
-    analyses: needsAnalyses(modulesFor(turn.intents, !!loaded.input.seller)) && !(turn.intents.includes("response_time") && turn.intents.includes("examples")) ? loaded.input.analyses : null,
+    analyses: loaded.input.analyses,
     needs: loaded.input.needs ?? null,
     sellerId: seller?.id ?? null,
     sellerName: seller?.name ?? null,
     intents: turn.intents,
     period: loaded.input.period,
-    scope: { regionId: state.regionId, inboxId: state.inboxId },
-    question: original ?? message.content,
+    scope: { regionId: loaded.input.state.regionId, inboxId: loaded.input.state.inboxId },
+    question: goal?.question ?? message.content,
     canSync: hubSpotConfigured(),
     canAnalyse: leadAnalysisExternalAllowed(),
     maxDays: MAX_SYNC_DAYS,
     today,
     createdAt: now.toISOString(),
   });
-  const actionSources: MessageSource[] = gaps.action ? [gaps.action] : [];
-  if (turn.request === "analyse" && gaps.action) {
-    const steps = gaps.action.steps;
-    const analyseStep = steps.find((s) => s.action === "analyse");
-    const text = analyseStep
-      ? `Ja. Det här är underlaget som analyseras: ${analyseStep.detail}${steps.length > 1 ? " Perioden behöver först hämtas från HubSpot – stegen står i den ordning de behöver göras." : ""} Klicka på "Analysera dialogerna" nedan. Analysen körs på servern och fortsätter även om du lämnar chatten. När den är klar kan du ställa frågan igen.`
-      : `Perioden behöver först hämtas från HubSpot för ${loaded.input.selection}. Klicka på knappen nedan.`;
-    return fixedAnswer(text, state, [...actionSources], { kind: "analyse_request", gap: steps.map((s) => s.action).join("+"), seller: !!seller });
+  // PENDING: the step offered now, kept with the selection it was offered for; none when nothing is missing.
+  const step = gaps.action?.steps[0] ?? null;
+  const pending: LeadPending | null =
+    gaps.action && step
+      ? {
+          id: crypto.randomUUID(),
+          kind: step.action === "sync" ? "fetch" : "analyse",
+          regionId: loaded.input.state.regionId,
+          inboxId: loaded.input.state.inboxId,
+          sellerId: loaded.input.state.sellerId,
+          from: loaded.input.period.from,
+          to: loaded.input.period.to,
+          inboxIds: step.inboxIds.slice(0, 60),
+          createdAt: now.toISOString(),
+        }
+      : null;
+  const action: LeadActionReference | null = gaps.action && pending ? { ...gaps.action, pendingId: pending.id, ...(goal ? { goal: goal.question } : {}) } : null;
+  const actionSources: MessageSource[] = action ? [action] : [];
+  const state: LeadChatState = { ...loaded.input.state, pending };
+
+  // "Hämta det", "Ja, gör det", or a step that just finished with more to do: the next step, with the counts.
+  if ((turn.request === "action" || turn.request === "continue") && action && step) {
+    const text = nextStepText(gaps.status, step, { seller: seller?.name ?? null, selection: loaded.input.selection, period: loaded.input.period, afterStep: turn.request === "continue" ? (turn.state.pending?.kind ?? "fetch") : null });
+    return fixedAnswer(text, state, [...actionSources], { kind: turn.request === "continue" ? "continue_step" : "action_request", gap: step.action, seller: !!seller });
   }
 
   // Earlier verified facts: from the answers the history keeps, still visible to the user.
@@ -194,16 +217,21 @@ export async function handleLeadChat({
   const earlierFacts = visibleFacts(history.facts, entities);
   const brief = buildBrief({
     ...loaded.input,
+    state,
     widenedFrom: widenedLabel(turn.widenedFrom, entities, pseudonyms),
     earlierFacts,
     actionNote:
-      turn.request === "analyse" && !gaps.action
-        ? "Användaren bad om analys av samma urval, men dialogerna i urvalet är redan analyserade. Säg det kort och besvara sedan den föregående frågan i konversationen utifrån underlaget."
-        : gaps.note,
+      turn.request === "action" && !action
+        ? "Användaren bad om hämtning eller analys, men underlaget för urvalet är redan komplett. Säg det kort och besvara sedan användarens mål utifrån underlaget."
+        : turn.request === "continue"
+          ? "Användaren har just hämtat eller analyserat underlaget med Folkes knapp, och det är nu komplett. Besvara användarens mål – frågan i det senaste meddelandet – utifrån underlaget."
+          : gaps.note,
+    status: gaps.status,
+    nextStep: step ? { label: step.label, detail: step.detail } : null,
     pseudonyms,
     now,
   });
-  const logBase = { modules: brief.modules, intents: turn.intents, scope: loaded.input.scopeType, seller: !!loaded.input.seller, ...brief.stats, ...loaded.timings, earlierFacts: earlierFacts.length, gap: gaps.action?.steps.map((s) => s.action).join("+") ?? null };
+  const logBase = { modules: brief.modules, intents: turn.intents, scope: loaded.input.scopeType, seller: !!loaded.input.seller, ...brief.stats, ...loaded.timings, earlierFacts: earlierFacts.length, gap: step?.action ?? null, ...turnLog };
 
   if (loaded.notFetched || gaps.answer) {
     const text = gaps.answer ?? `Perioden är inte hämtad från HubSpot för ${loaded.input.selection}, så det finns inget underlag att svara utifrån.`;
@@ -280,7 +308,7 @@ export async function handleLeadChat({
         await supabase.from("messages").delete().eq("id", storedMessage.id);
       } else if (answer.trim()) {
         const verified = verifyCitations(answer, brief.leads.length);
-        const sources = finalSources(brief, verified.cited, verified.content, gaps.action);
+        const sources = finalSources(brief, verified.cited, verified.content, action);
         cited = verified.cited.length;
         const { error } = await supabase.from("messages").insert({ conversation_id: conversation.id, role: "assistant", content: verified.content, sources });
         if (error) console.error("[api/chat/lead] could not store answer", error.message);
@@ -420,25 +448,6 @@ async function loadHistory(supabase: SupabaseClient, conversationId: string): Pr
   };
 }
 
-/** The question before "Kan du analysera dessa?" (the latest user question that is not itself such a request). */
-async function previousQuestion(supabase: SupabaseClient, conversationId: string, currentId: string): Promise<string | null> {
-  const { data } = await supabase
-    .from("messages")
-    .select("id, content")
-    .eq("conversation_id", conversationId)
-    .eq("role", "user")
-    .order("created_at", { ascending: false })
-    .limit(8)
-    .returns<{ id: string; content: string }[]>();
-  const today = stockholmToday();
-  for (const m of data ?? []) {
-    if (m.id === currentId) continue;
-    const parsed = parseQuestion(m.content, today);
-    if (!parsed.analyseRequest && !parsed.sellerIntro) return m.content.slice(0, 2000);
-  }
-  return null;
-}
-
 /** Most sellers listed as choices; the user can always type a name. */
 const SELLER_CHOICES = 12;
 
@@ -452,7 +461,7 @@ export function sellerIntro(
   sellers: { id: string; name: string }[],
 ): { text: string; prompts: LeadPromptsReference | null } {
   const period = periodLabel(input.period.from, input.period.to);
-  const prompts = (list: string[]): LeadPromptsReference => ({ kind: "lead_prompts", id: "prompts", prompts: list });
+  const prompts = (list: [string, LeadTurn][]): LeadPromptsReference => ({ kind: "lead_prompts", id: "prompts", prompts: list.map(([p]) => p), turns: list.map(([, t]) => t) });
   if (!input.seller) {
     const first = new Map<string, number>();
     for (const r of input.rows) if (r.responderId) first.set(r.responderId, (first.get(r.responderId) ?? 0) + 1);
@@ -462,7 +471,7 @@ export function sellerIntro(
     }
     return {
       text: `Vilken säljare vill du veta mer om? Här är säljarna som gav första svaret på leads i ${input.selection} under ${period}${known.length > SELLER_CHOICES ? ` (de ${SELLER_CHOICES} med flest)` : ""}. Välj en, eller skriv namnet.`,
-      prompts: prompts(known.slice(0, SELLER_CHOICES).map((s) => `Jag vill veta mer om ${s.name}`)),
+      prompts: prompts(known.slice(0, SELLER_CHOICES).map((s) => [`Jag vill veta mer om ${s.name}`, { kind: "choose_seller", sellerId: s.id }])),
     };
   }
   const name = input.seller.name;
@@ -476,14 +485,15 @@ export function sellerIntro(
     : "";
   return {
     text: `Vad vill du veta om ${name}? Under ${period} gav ${name} första svaret på ${firstRows.length} ${firstRows.length === 1 ? "lead" : "leads"} i ${input.selection}.${status} Välj en fråga nedan eller skriv en egen.`,
+    // Each suggestion carries its topics: a click sets the goal without interpretation.
     prompts: prompts([
-      `Hur kommunicerar ${name} med kunderna?`,
-      `Vad gör ${name} bra, och vad kan utvecklas?`,
-      `Hur väl driver ${name} dialogerna mot nästa steg?`,
-      `Hur hanterar ${name} kunder när bilen inte finns kvar?`,
-      `Vilka behov och frågor har ${genitive(name)} kunder?`,
-      `Hur snabbt svarar ${name} kunderna?`,
-      `Vad kan vara bra att ta upp i nästa coaching med ${name}?`,
+      [`Hur kommunicerar ${name} med kunderna?`, { kind: "ask", topics: ["seller_work"] }],
+      [`Vad gör ${name} bra, och vad kan utvecklas?`, { kind: "ask", topics: ["strengths_improvements"] }],
+      [`Hur väl driver ${name} dialogerna mot nästa steg?`, { kind: "ask", topics: ["follow_up_next_steps"] }],
+      [`Hur hanterar ${name} kunder när bilen inte finns kvar?`, { kind: "ask", topics: ["unavailable_car", "seller_work"] }],
+      [`Vilka behov och frågor har ${genitive(name)} kunder?`, { kind: "ask", topics: ["customer_needs"] }],
+      [`Hur snabbt svarar ${name} kunderna?`, { kind: "ask", topics: ["response_times"] }],
+      [`Vad kan vara bra att ta upp i nästa coaching med ${name}?`, { kind: "ask", topics: ["coaching"] }],
     ]),
   };
 }

@@ -7,7 +7,7 @@ import { streamChat } from "@/lib/chat/client";
 import type { ConversationMode } from "@/lib/chat/protocol";
 import type { WaitingPhase } from "@/lib/chat/waiting-texts";
 import type { Attachment, Message } from "@/lib/domain/types";
-import type { LeadChatContext } from "@/lib/leads/chat";
+import type { LeadChatContext, LeadTurn } from "@/lib/leads/chat";
 
 export type ChatStatus = "idle" | "submitted" | "streaming" | "error";
 
@@ -16,6 +16,8 @@ export interface OutgoingMessage {
   attachments: Attachment[];
   /** Leadanalys: the page selection a new conversation starts from. */
   leadContext?: LeadChatContext;
+  /** Leadanalys: a click that needs no interpretation (continuation, seller intro, suggestion). */
+  leadTurn?: LeadTurn;
 }
 
 function tempId() {
@@ -32,12 +34,15 @@ export function useChat({
   conversationId: initialConversationId,
   initialMessages = [],
   mode = "standard",
+  interpreting = false,
 }: {
   assistantId: string;
   conversationId: string | null;
   initialMessages?: Message[];
   /** Requested mode for a NEW conversation (the server decides and verifies). */
   mode?: ConversationMode;
+  /** Leadanalys: the server reads the question first ("Folke tolkar frågan…"). */
+  interpreting?: boolean;
 }) {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -88,6 +93,7 @@ export function useChat({
             conversationId: conversationId.current,
             mode: conversationId.current ? undefined : mode,
             leadContext: conversationId.current ? undefined : outgoing.leadContext,
+            ...(outgoing.leadTurn ? { leadTurn: outgoing.leadTurn } : {}),
             message: {
               content: outgoing.text,
               attachmentIds: outgoing.attachments.flatMap((a) => (a.attachmentId ? [a.attachmentId] : [])),
@@ -153,7 +159,9 @@ export function useChat({
   const waitingPhase: WaitingPhase = !waiting.searchDone
     ? waiting.attachments
       ? "attachments"
-      : "searching"
+      : interpreting
+        ? "interpreting"
+        : "searching"
     : waiting.sources >= 2
       ? "weighing"
       : "composing";

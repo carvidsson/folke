@@ -604,10 +604,10 @@ describe("missing lead material", () => {
   };
   const replied = (id: string) => row({ threadId: id, inboxId: "100" });
 
-  it("A: nothing fetched – explains it and offers the fetch first, then the analysis", () => {
+  it("A: nothing fetched – the fetch first; what needs an analysis is shown when it is done", () => {
     const g = findGaps({ ...base, coverage: { ...fullCoverage, complete: false, completeInboxes: 0, coveredDays: 0, missing: [{ inboxId: "100", name: "Alingsås Audi", coveredDays: 0 }] }, analyses: new Map() });
-    expect(g.answer).toMatch(/inte hämtad från HubSpot för Alingsås Audi ännu.*Vill du hämta den/);
-    expect(g.action?.steps.map((s) => s.action)).toEqual(["sync", "analyse"]);
+    expect(g.answer).toMatch(/^Jag behöver först hämta underlaget för Alingsås Audi, .*från HubSpot.*Klicka på "Hämta underlaget".*fortsätter jag med din fråga/);
+    expect(g.action?.steps.map((s) => s.action)).toEqual(["sync"]);
     expect(g.action?.question).toBe(base.question);
     expect(g.action?.scope).toMatchObject({ inboxId: "100", preset: "custom", from: period.from, to: period.to });
   });
@@ -615,23 +615,24 @@ describe("missing lead material", () => {
   it("B: fetched but not analysed – answers like a colleague and offers the analysis", () => {
     const g = findGaps({ ...base, rows: [replied("1"), replied("2")], analyses: new Map() });
     expect(g.answer).toBe(
-      `Jag har leadstatistiken för ${periodLabel(period.from, period.to)} i Alingsås Audi, men dialogerna är inte analyserade ännu (2 dialoger med säljarsvar). Vill du analysera dem så att jag kan titta på återkommande styrkor och utvecklingsområden?`,
+      `Jag hittade 2 relevanta dialoger med säljarsvar i Alingsås Audi, ${periodLabel(period.from, period.to)}. Ingen av dem är AI-analyserad ännu, så de behöver analyseras innan jag kan titta på återkommande styrkor och utvecklingsområden. Klicka på "Analysera 2 dialoger" nedan – analysen körs på servern. När det är klart fortsätter jag med din fråga.`,
     );
-    expect(g.action?.steps).toMatchObject([{ action: "analyse", label: "Analysera dialogerna", inboxIds: ["100"] }]);
+    expect(g.action?.steps).toMatchObject([{ action: "analyse", label: "Analysera 2 dialoger", inboxIds: ["100"] }]);
   });
 
-  it("C: both needed – the fetch comes first, then the analysis", () => {
+  it("C: both needed – the fetch first (the analysis is offered after it, with its counts)", () => {
     const partial = { ...fullCoverage, complete: false, completeInboxes: 0, coveredDays: 10, missing: [{ inboxId: "100", name: "Alingsås Audi", coveredDays: 10 }] };
     const g = findGaps({ ...base, coverage: partial, rows: [replied("1")], analyses: new Map() });
-    expect(g.action?.steps.map((s) => s.action)).toEqual(["sync", "analyse"]);
-    expect(g.answer).toMatch(/uppdateras först.*i den ordning/);
+    expect(g.action?.steps.map((s) => s.action)).toEqual(["sync"]);
+    expect(g.answer).toMatch(/ingen av dem är AI-analyserad ännu. Perioden behöver först hämtas från HubSpot – klicka på "Hämta underlaget"/);
+    expect(g.status).toMatchObject({ dialogues: { relevant: 1, current: 0, missing: 1 }, complete: false });
   });
 
   it("partly analysed, or a broader question: Folke answers and the step is offered under the answer", () => {
     const analyses = new Map([["1", {} as StoredAnalysis]]);
     const g = findGaps({ ...base, intents: ["overview"], rows: [replied("1"), replied("2")], analyses });
     expect(g.answer).toBeNull();
-    expect(g.note).toMatch(/1 av 2 dialoger med säljarsvar är inte AI-analyserade/);
+    expect(g.note).toMatch(/1 av 2 dialoger med säljarsvar saknar aktuell AI-analys; under svaret finns knappen "Analysera 1 dialog"/);
     expect(g.action?.steps.map((s) => s.action)).toEqual(["analyse"]);
   });
 
@@ -669,58 +670,13 @@ describe("missing lead material", () => {
 
   it("a region: one step analyses the region's inboxes", () => {
     const g = findGaps({ ...base, scope: { regionId: R_A, inboxId: null }, selection: "Alingsås", rows: [replied("1")], analyses: new Map() });
-    expect(g.action?.steps).toMatchObject([{ action: "analyse", label: "Analysera dialogerna", detail: expect.stringMatching(/i Alingsås analyseras med AI, inkorg för inkorg/) }]);
+    expect(g.action?.steps).toMatchObject([{ action: "analyse", label: "Analysera 1 dialog", detail: expect.stringMatching(/i Alingsås analyseras med AI, inkorg för inkorg/) }]);
     expect(g.action?.scope).toMatchObject({ regionId: R_A, inboxId: null });
   });
 });
 
 describe("a seller's dialogues (2026-10-06)", () => {
   const period = resolvePeriod("30d", TODAY);
-
-  it("questions about communication, follow-up and coaching are about the analysed dialogues, not an overview", () => {
-    for (const q of [
-      "Hur är Mias kommunikation med kunderna? Kolla över senaste 30 dagarna",
-      "Hur bemöter Mia kunderna?",
-      "Hur hanterar Mia kunderna?",
-      "Hur väl driver Mia dialogerna framåt?",
-      "Hur följer Mia upp sina leads?",
-      "Vad kan vara bra att ta upp i nästa coaching med Mia?",
-    ]) {
-      const intents = parseQuestion(q, TODAY).intents;
-      expect(intents, q).toEqual(expect.arrayContaining(["patterns", "examples"]));
-      expect(intents, q).not.toContain("overview");
-    }
-    // Hard facts can still come along.
-    expect(parseQuestion("Hur snabbt svarar Mia, och hur är kommunikationen?", TODAY).intents).toEqual(expect.arrayContaining(["response_time", "patterns"]));
-  });
-
-  it("'Kan du analysera dessa?' and the like ask to analyse the previous selection – other questions do not", () => {
-    for (const q of ["Kan du analysera dessa?", "Analysera dem", "Analysera dialogerna", "Kör analysen", "Ja, analysera dem", "gör analysen"]) {
-      expect(parseQuestion(q, TODAY).analyseRequest, q).toBe(true);
-    }
-    for (const q of ["Vad visar AI-analysen?", "Analysera hur Mia kommunicerar", "Hur går det för Mia?"]) {
-      expect(parseQuestion(q, TODAY).analyseRequest, q).toBe(false);
-    }
-  });
-
-  it("the follow-up keeps exactly the seller, the selection and the period", () => {
-    const first = answer("Hur är Bo Testssons kommunikation med kunderna? Kolla över senaste 30 dagarna");
-    expect(first.state).toMatchObject({ sellerId: "A-12", regionId: R_A, inboxId: null, preset: "30d" });
-    expect(first.request).toBeNull();
-    const follow = answer("Kan du analysera dessa?", first.state);
-    expect(follow.request).toBe("analyse");
-    expect(follow.state).toMatchObject({ sellerId: "A-12", regionId: R_A, inboxId: null, preset: "30d", from: first.state.from, to: first.state.to });
-    expect(follow.intents).toEqual(expect.arrayContaining(["patterns", "examples"]));
-  });
-
-  it("'Jag vill veta mer om en säljare' and a named seller are an introduction; a region is not", () => {
-    const context = { regionId: R_A, preset: "7d" as const };
-    const intro = turn("Jag vill veta mer om en säljare", null, context);
-    expect(intro).toMatchObject({ kind: "answer", request: "seller_intro", state: { regionId: R_A, sellerId: null, intents: [] } });
-    const chosen = answer("Jag vill veta mer om Bo Testsson", (intro as { state: LeadChatState }).state);
-    expect(chosen).toMatchObject({ request: "seller_intro", state: { sellerId: "A-12", regionId: R_A, preset: "7d" } });
-    expect(answer("Jag vill veta mer om Alingsås").request).toBeNull();
-  });
 
   const sellerRows = () => [
     // Bo's dialogues: two in the Skoda inbox (not analysed), one in Volkswagen PB (analysed).
@@ -762,7 +718,7 @@ describe("a seller's dialogues (2026-10-06)", () => {
 
   it("nothing analysed yet: a fixed answer about the seller, with the step", () => {
     const g = findGaps({ ...gapBase, rows: sellerRows(), analyses: new Map() });
-    expect(g.answer).toMatch(/^Jag har leadstatistiken för Bo Testsson i Region Alingsås, .* men Bo Testssons dialoger är inte AI-analyserade ännu \(3 dialoger där Bo Testsson gav första svaret\)\. Vill du analysera dem\?/);
+    expect(g.answer).toMatch(/^Jag hittade 3 relevanta dialoger där Bo Testsson gav första svaret i Region Alingsås, .*\. Ingen av Bo Testssons dialoger är AI-analyserad ännu, så de behöver analyseras innan jag kan beskriva hur Bo Testsson kommunicerar med kunderna/);
     expect(g.action!.steps.find((s) => s.action === "analyse")!.inboxIds).toEqual(["100", "102"]);
   });
 

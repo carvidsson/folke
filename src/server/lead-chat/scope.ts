@@ -35,10 +35,11 @@ export type TurnResolution =
       /** The selection before a widening ("resten", "övriga", "totalt"), so the brief can say what changed. */
       widenedFrom: LeadChatState | null;
       /**
-       * "analyse": "Kan du analysera dessa?" – the previous question's selection and subject; Folke offers the
-       * analysis (never starts it). "seller_intro": "Jag vill veta mer om en säljare / om Mia" – help on.
+       * What the turn asks of a step (the planner, or a structured click): "action" – fetch, analyse or "ja"
+       * to the pending step (Folke shows the button; it never starts anything); "decline"; "continue" –
+       * after a step, towards the goal; "seller_intro" – choose a seller, then what to ask.
        */
-      request: "analyse" | "seller_intro" | null;
+      request: "action" | "decline" | "continue" | "seller_intro" | null;
     }
   | { kind: "clarify"; text: string; state: LeadChatState | null }
   | { kind: "not_found"; text: string; state: LeadChatState | null }
@@ -71,7 +72,7 @@ const SYNONYMS: Record<string, string | null> = {
   och: null,
 };
 
-function tokens(text: string): string[] {
+export function tokens(text: string): string[] {
   return fold(text)
     .split(" ")
     .filter(Boolean)
@@ -88,7 +89,7 @@ function has(question: Set<string>, token: string) {
 
 type Match<T> = { found: T[]; mentioned: boolean };
 
-function matchRegions(q: Set<string>, entities: LeadEntities): Match<LeadEntities["regions"][number]> {
+export function matchRegions(q: Set<string>, entities: LeadEntities): Match<LeadEntities["regions"][number]> {
   const found = entities.regions.filter((r) => tokens(r.name).every((t) => has(q, t)));
   return { found, mentioned: found.length > 0 };
 }
@@ -97,7 +98,7 @@ function matchRegions(q: Set<string>, entities: LeadEntities): Match<LeadEntitie
  * Inboxes: a facility word and the rest of the name ("vw i alingsås", "skoda karlshamn"), or a name
  * part that only one visible inbox has. Facilities alone are returned separately.
  */
-function matchInboxes(q: Set<string>, entities: LeadEntities, within: string[] | null) {
+export function matchInboxes(q: Set<string>, entities: LeadEntities, within: string[] | null) {
   const pool = within ? entities.inboxes.filter((i) => within.includes(i.id)) : entities.inboxes;
   const facilities = [...new Set(entities.inboxes.map((i) => i.facility).filter((f): f is string => !!f))];
   const facility = facilities.filter((f) => tokens(f).every((t) => has(q, t)));
@@ -116,7 +117,7 @@ function matchInboxes(q: Set<string>, entities: LeadEntities, within: string[] |
   return { found, facility };
 }
 
-function matchSellers(q: Set<string>, entities: LeadEntities, text: string) {
+export function matchSellers(q: Set<string>, entities: LeadEntities, text: string) {
   const firstCount = new Map<string, number>();
   for (const s of entities.sellers) {
     const first = tokens(s.name)[0];
@@ -152,11 +153,11 @@ function namedTarget(text: string): boolean {
   return [...q.matchAll(/(?<!\p{L})(?:i|på|hos|för) (\p{Lu}\p{L}{2,})/gu)].some((m) => !NOT_NAMES.has(fold(m[1])));
 }
 
-function regionOf(entities: LeadEntities, inboxId: string) {
+export function regionOf(entities: LeadEntities, inboxId: string) {
   return entities.inboxes.find((i) => i.id === inboxId)?.regionId ?? null;
 }
 
-function label(list: string[]) {
+export function label(list: string[]) {
   return list.length <= 1 ? (list[0] ?? "") : `${list.slice(0, -1).join(", ")} eller ${list[list.length - 1]}`;
 }
 
@@ -285,13 +286,6 @@ export function resolveTurn(input: {
     intents = base.intents.some((i) => i === "examples" || i === "patterns") ? [...new Set([...base.intents, "patterns" as const])] : base.intents;
   }
 
-  // "Analysera dessa": exactly the previous selection and subject, with the analysed dialogues loaded.
-  // "Veta mer om" is a seller intro only about a seller ("en säljare", or a named one) – not a region or inbox.
-  const sellerIntro = parsed.sellerIntro && (/säljar/i.test(text) || sellers.length === 1) && !inboxMatch.found.length && !regions.found.length;
-  const request = parsed.analyseRequest ? "analyse" : sellerIntro ? "seller_intro" : null;
-  if (request === "analyse") intents = [...new Set([...(base?.intents.length ? base.intents : []), "patterns" as const])];
-  if (request === "seller_intro") intents = ["patterns"];
-
   const period = parsed.period
     ? resolvePeriod(parsed.period.preset, today, parsed.period.from, parsed.period.to)
     : resolvePeriod(base?.preset, today, base?.from, base?.to);
@@ -304,7 +298,7 @@ export function resolveTurn(input: {
     widenedFrom: widened && base ? { ...base, ...before } : null,
     intents,
     examples,
-    request,
+    request: null,
     state: {
       regionId,
       inboxId,
@@ -312,11 +306,12 @@ export function resolveTurn(input: {
       preset: period.preset,
       from: period.from,
       to: period.to,
-      // A seller intro is no subject of its own: the next question chooses one.
-      intents: request === "seller_intro" ? [] : intents,
+      intents,
       comparison,
       focus: parsed.sameKind || (!parsed.intents.length && base) ? (base?.focus ?? []) : [],
       needsFocus,
+      goal: base?.goal ?? null,
+      pending: base?.pending ?? null,
     },
   };
 }
@@ -336,7 +331,7 @@ export function validState(state: LeadChatState | null, entities: LeadEntities):
 }
 
 /** The page's selection: help only – validated against what the user may see, like everything else. */
-function fromContext(context: LeadChatContext | null, entities: LeadEntities, today: string): LeadChatState | null {
+export function fromContext(context: LeadChatContext | null, entities: LeadEntities, today: string): LeadChatState | null {
   if (!context) return null;
   const period = resolvePeriod(context.preset, today, context.from, context.to);
   return validState(

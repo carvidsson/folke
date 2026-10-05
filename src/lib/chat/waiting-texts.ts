@@ -2,6 +2,7 @@
  * Folke's waiting texts while an answer is prepared. Each pool matches what
  * the system is actually doing at that moment (see useChat):
  *
+ *   interpreting – Leadanalys, before the stream starts: the question is read and the material checked
  *   searching   – before the stream starts: the server searches Kunskapsbanken
  *   attachments – the same phase, when the message has attachments (they are read too)
  *   weighing    – the model works with two or more retrieved excerpts
@@ -10,9 +11,11 @@
  * Dry, warm and low-key – an experienced colleague, never unsure or sloppy.
  */
 
-export type WaitingPhase = "searching" | "attachments" | "weighing" | "composing";
+export type WaitingPhase = "interpreting" | "searching" | "attachments" | "weighing" | "composing";
 
 export const WAITING_TEXTS: Record<WaitingPhase, readonly string[]> = {
+  // Leadanalys: the question is read before any data is fetched.
+  interpreting: ["Folke tolkar frågan…", "Folke läser frågan…", "Folke ser efter vad du menar…"],
   searching: [
     "Folke ställer ifrån sig kaffet och börjar leta…",
     "Folke avbryter fikan och letar i arkivet…",

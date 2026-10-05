@@ -1,5 +1,5 @@
 import type { Attachment } from "@/lib/domain/types";
-import { leadChatContextSchema, type LeadChatContext } from "@/lib/leads/chat";
+import { leadChatContextSchema, leadTurnSchema, type LeadChatContext, type LeadTurn } from "@/lib/leads/chat";
 
 /**
  * Hands a prompt (and its already uploaded attachments) from the start
@@ -14,6 +14,8 @@ export interface PendingPrompt {
   attachments: Attachment[];
   /** Leadanalys: the selection the question was asked from (validated again on the server). */
   leadContext?: LeadChatContext;
+  /** Leadanalys: a structured start ("Jag vill veta mer om en säljare"). */
+  leadTurn?: LeadTurn;
 }
 
 export function setPendingPrompt(prompt: PendingPrompt) {
@@ -35,6 +37,7 @@ export function takePendingPrompt(): PendingPrompt | null {
           text: parsed.text,
           attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
           leadContext: leadChatContextSchema.safeParse(parsed.leadContext).data,
+          leadTurn: leadTurnSchema.safeParse(parsed.leadTurn).data,
         }
       : null;
   } catch {

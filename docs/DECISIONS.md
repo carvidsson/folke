@@ -740,6 +740,43 @@ Fel som rättades under valideringen:
   - Förslagen är knappar som skickar frågan som användarens nästa meddelande.
   - Svaren är fasta texter utan AI. Säljarnamn i dem maskeras när historiken går till modellen.
 
+### ADR-054 – Planerare och samtalstillstånd i Leadanalys-chatten
+
+**Sammanhang:** Leadanalys-chatten förstod frågor med drygt 45 regex-mönster och regler, och OpenAI kom in först när servern redan hade valt underlag. Naturliga följdfrågor föll därför bort. Exempel: "Ta senaste 60 dagarna", "Kan du hämta underlaget?" och "Nej, jag menade Mia". Varje ny formulering krävde en ny regel. Samtidigt kunde chatten säga att en dialog var analyserad i en tur och att analys saknades i nästa, eftersom olika delar räknade på olika sätt.
+
+**Beslut:**
+- **En begränsad planerare** (`planner.ts`): gpt-6-luna med `reasoning: none` och ett strikt JSON-schema.
+  - Den beskriver bara hur meddelandet ändrar urvalet (säljare, ort eller inkorg, period, jämförelse), vilka ämnen frågan gäller (en stängd lista), om användaren ber om exempel, och om användaren uttryckligen ber om hämtning eller analys eller svarar på ett väntande steg. Den kan också be om ett förtydligande eller avgöra att frågan ligger utanför Leadanalys.
+  - Den väljer inga id, läser ingen data, räknar inget och avgör inte om något behöver hämtas eller analyseras.
+  - Användarens text pseudonymiseras först: kända säljare blir "Säljare N" och dolda eller tvetydiga namn blir "[namn]". Planeraren får bara alias, namn på orter och inkorgar, det aktiva urvalet, målfrågan (pseudonymiserad) och det väntande steget. Ingen leaddata och ingen dialogtext.
+- **Servern validerar planen** (`plan.ts`):
+  - Säljare, ort och inkorg löses mot det användaren får se (RLS). Det som inte löses blir "hittas inte", aldrig något bredare. Varje ord i ett inkorgsnamn måste finnas i den inkorg som väljs.
+  - Perioder normaliseras till datum: senaste N dagar, veckor eller månader, kalendermånad, "sedan", intervall, perioden före och längre tillbaka. Högst ett år visas och högst 92 dagar hämtas åt gången. Inga nya förval.
+  - Ämnen blir de moduler i underlaget som de får ladda.
+- **Reserv:** dagens regelbaserade tolkning (`resolveTurn`) används när planeraren är avstängd, tar mer än 6 sekunder, misslyckas eller ger något som inte går att validera. Loggen anger väg, tid, utfall och valideringskoder, aldrig text eller namn.
+- **Strukturerade klick hoppar över planeraren:** fortsättning efter ett steg, "Jag vill veta mer om en säljare", val av säljare och frågeförslag (`leadTurn`). De valideras på samma sätt.
+- **Samtalstillstånd v2** i `conversations.lead_context` (jsonb, ingen migration):
+  - **Urval:** ort, inkorg, säljare, period och jämförelse.
+  - **Mål:** frågans ämnen och själva frågan. Målet ligger kvar när en följdfråga bara ändrar urvalet, bekräftar eller ber om ett steg.
+  - **Väntande steg:** hämtning eller analys, med det urval steget gäller. Steget nollställs när urvalet ändras.
+- **En definition av analysstatus** (`status.ts`), samma som analysjobbet och Leadanalys-sidan använder.
+  - En klassificering räknas som aktuell när trådens senaste meddelande och uppföljningsläge är oförändrade. En behovsanalys räknas som aktuell när det senaste meddelandet är oförändrat.
+  - Chatten läser bara aktuella analyser.
+  - Statusen (relevanta, aktuella och saknade, vad frågan kräver, möjlig åtgärd) står i underlaget, och modellen får inte säga emot den eller påstå att Folke inte kan hämta eller analysera.
+- **Ett steg i taget, och sedan tillbaka till målet:**
+  - Folke erbjuder nästa steg: först hämtning, sedan analys med antal ("Analysera 11 dialoger").
+  - "Ja, gör det" och liknande visar knappen igen. Ett steg startar alltid med ett klick.
+  - När steget är klart skickar knappen en strukturerad fortsättning. Servern kontrollerar då igen och erbjuder nästa steg eller besvarar målet.
+  - "Ställ frågan igen" finns bara kvar som reserv, under namnet "Fortsätt".
+- **Borttaget:** de regex-mönster som bara emulerade förståelse i den förra versionen (kvalitativa frågor, "analysera dessa", "veta mer om"). Reservtolkningen har kvar sina mönster.
+
+**Latens och kostnad (folke-dev, 2026-10-06):**
+- Planeraren tog i median 2,2 s (p90 3,9 s) i hela konversationer, inklusive kontroll av AI-gränser.
+- Kostnaden är cirka 0,00014 USD per meddelande.
+- Den tidigare valda datan förhämtas medan planeraren arbetar.
+
+**Alternativ som valdes bort:** fler regex-mönster för varje ny formulering. En databasagent med fri SQL eller fria verktyg (servern ska vara kontrollplanet). gpt-5.4-nano som planerare (snabbare men sämre och inte i katalogen).
+
 ---
 
 ## Öppna beslut

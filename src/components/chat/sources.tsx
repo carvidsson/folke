@@ -56,7 +56,7 @@ export function Sources({ sources, idPrefix }: { sources: MessageSource[]; idPre
       {actions.map((a) => (
         <LeadActions key={a.id} action={a} />
       ))}
-      {prompts && <SuggestedPrompts prompts={prompts.prompts} />}
+      {prompts && <SuggestedPrompts prompts={prompts.prompts} turns={prompts.turns} />}
       {numbered.length > 0 && (
         <div>
           <p className="text-overline mb-2">{leadsOnly ? "Leads i svaret" : "Källor"}</p>
@@ -209,17 +209,17 @@ function Basis({ basis }: { basis: LeadBasisReference }) {
  * Questions the user can ask next with one click ("Jag vill veta mer om en säljare"): each is sent as the
  * user's own next message, so it goes through the same chat as a typed question. Typing stays possible.
  */
-function SuggestedPrompts({ prompts }: { prompts: string[] }) {
+function SuggestedPrompts({ prompts, turns }: { prompts: string[]; turns?: LeadPromptsReference["turns"] }) {
   const chat = useChatActions();
   if (!chat || !prompts.length) return null;
   return (
     <ul className="flex flex-wrap gap-1.5" aria-label="Förslag på frågor">
-      {prompts.map((p) => (
+      {prompts.map((p, i) => (
         <li key={p}>
           <button
             type="button"
             disabled={chat.busy}
-            onClick={() => chat.ask(p)}
+            onClick={() => chat.ask(p, turns?.[i])}
             className="rounded-md border bg-background px-2.5 py-1.5 text-left text-xs shadow-xs transition-colors hover:border-navy-300 hover:text-foreground disabled:opacity-50"
           >
             {p}
