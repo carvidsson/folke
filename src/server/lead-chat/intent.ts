@@ -66,6 +66,23 @@ const INTENT_PATTERNS: [LeadIntent, RegExp][] = [
   ["explain", rx(String.raw`varför|vad beror|förklar|orsak|hur kommer det sig`)],
 ];
 
+/**
+ * The seller's work in the dialogues – communication, how customers are met and followed up, how the
+ * dialogues are driven forward, coaching: answered from the AI-analysed dialogues (patterns and examples),
+ * not as an overview.
+ */
+const QUALITATIVE = rx(
+  String.raw`kommunic|kommunik|bemöt|kundkontakt|kundbemötande|tonläge|\btonen\b|hanterar( \p{L}+)? (sina )?(kunder|dialog|leads)|tar( \p{L}+)? hand om (sina )?kunder|driver( \p{L}+)? (dialog|affär|leads)|framåt|följer( \p{L}+)? upp|uppföljning|\bcoach`,
+);
+
+/** "Kan du analysera dessa?", "Kör analysen": a request to analyse the previous selection (never started by Folke). */
+const ANALYSE_REQUEST = rx(
+  String.raw`\banalysera\b(?! (hur|varför|vad))|\bkör (analysen|en analys|analys)\b|\bgör (analysen|en analys)\b|\bstarta (analysen|en analys)\b`,
+);
+
+/** "Jag vill veta mer om en säljare" (Fråga Folke) – or about a named seller: Folke helps the user on. */
+const SELLER_INTRO = rx(String.raw`\bveta mer om\b`);
+
 /** Questions about things the lead analysis does not contain. Answered without AI. */
 const OUT_OF_SCOPE: [string, RegExp][] = [
   ["sales", rx(String.raw`\baffär|\bsålt\b|\bsålde\b|försäljning|konverter|intäkt|omsättning|ordervärde|hur många bilar`)],
@@ -121,6 +138,10 @@ export interface ParsedQuestion {
   /** "samma problem": keep the previous answer's focus types. */
   sameKind: boolean;
   outOfScope: string | null;
+  /** A pure "analysera dessa" – analyse the previous selection (the user still starts it with the button). */
+  analyseRequest: boolean;
+  /** "Jag vill veta mer om en säljare / om Mia": help choosing a seller, then what to ask. */
+  sellerIntro: boolean;
 }
 
 export function normalizeQuestion(text: string) {
@@ -132,6 +153,9 @@ export function parseQuestion(text: string, today: string): ParsedQuestion {
   const needsFocus = needsFocusOf(q);
   const intents = INTENT_PATTERNS.filter(([, re]) => re.test(q)).map(([intent]) => intent);
   if ((needsFocus.length || NEEDS_WORDS.test(q)) && !intents.includes("needs")) intents.push("needs");
+  // The seller's work in the dialogues: the analysed dialogues and examples of them.
+  if (QUALITATIVE.test(q)) for (const i of ["patterns", "examples"] as const) if (!intents.includes(i)) intents.push(i);
+  const sellerIntro = SELLER_INTRO.test(q) && intents.length === 0;
   return {
     intents,
     needsFocus,
@@ -141,6 +165,8 @@ export function parseQuestion(text: string, today: string): ParsedQuestion {
     all: ALL.test(q),
     sameKind: SAME_KIND.test(q),
     outOfScope: OUT_OF_SCOPE.find(([, re]) => re.test(q))?.[0] ?? null,
+    analyseRequest: ANALYSE_REQUEST.test(q) && intents.length === 0,
+    sellerIntro,
   };
 }
 

@@ -728,6 +728,18 @@ Fel som rättades under valideringen:
 - **Förloppet:** "x av y inkorgar" räknar inkorgar vars dialoger är klassificerade och sparade. Därefter visas "sammanställer" tills alla sammanvägningar är sparade.
 - **En inkorg räknas som klar bara om inget som skulle analyseras saknas.** Undantag är dialoger som avidentifieringen har stoppat och dialoger över gränsen per körning. Misslyckade dialoger och sådant som återstår visas som återstående, och nästa klick fortsätter.
 
+**Säljaranalys i chatten (2026-10-06):**
+- **Kvalitativa frågor om en säljare** gäller de analyserade dialogerna, inte översikten. Det gäller frågor om kommunikation, bemötande, kundkontakt, uppföljning, hur dialogerna drivs framåt och coaching. Svarstider och antal kan komma med.
+- **Ingen undre gräns.** Den tidigare gränsen på 10 analyserade dialoger för mönster är borttagen. Underlagets storlek styr hur säkert slutsatserna uttrycks. Antalet anges alltid ("baserat på 7 analyserade dialoger"). Med få dialoger beskrivs konkreta iakttagelser och exempel, aldrig att någon "brukar" eller ett "tydligt mönster". Inga betyg eller poäng.
+- **Analysknappen för en säljare gäller bara säljarens inkorgar.** Det är inkorgarna där säljarens dialoger saknar aktuell analys. Analysen körs med ortsbatchen och dess vanliga inkorgsjobb, utan ortssammanvägning. Det fungerar även från Alla leads, eftersom det inte är en samlad bild av verksamheten.
+  - Servern godtar bara inkorgar som ingår i användarens eget urval (via RLS). En inkorg utanför urvalet gör att hela begäran avvisas som "hittades inte".
+  - Knappen visar säljare, period, antal dialoger och inkorg.
+- **V1-begränsning:** ligger säljarens dialoger i en gemensam inkorg analyseras hela inkorgen för perioden, och knappen säger det. En analys som bara gäller en säljare skulle kräva en ny jobbnyckel och migration. Det tas först om användningen visar att det behövs.
+- **"Kan du analysera dessa?" och liknande** betyder föregående frågas exakta urval: säljare, ort eller inkorg och period. Folke svarar med knappen, aldrig med en egen start. Efter analysen ställer "Ställ frågan igen" den ursprungliga frågan. Är allt redan analyserat besvaras den ursprungliga frågan direkt.
+- **"Fråga Folke" har ingången "Jag vill veta mer om en säljare".** Folke föreslår säljarna i urvalet, alltså de som gav första svaret under perioden bland leads användaren ser. När en säljare är vald föreslår Folke frågor som Leadanalys kan besvara.
+  - Förslagen är knappar som skickar frågan som användarens nästa meddelande.
+  - Svaren är fasta texter utan AI. Säljarnamn i dem maskeras när historiken går till modellen.
+
 ---
 
 ## Öppna beslut

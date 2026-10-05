@@ -26,6 +26,8 @@ export interface GapInput {
   /** lead-needs-1: null when the question does not need the customer needs. */
   needs?: Map<string, StoredNeeds> | null;
   sellerId: string | null;
+  /** The seller's name as the user sees it (fixed texts only; never sent to the model). */
+  sellerName?: string | null;
   intents: LeadIntent[];
   period: Period;
   scope: { regionId: string | null; inboxId: string | null };
@@ -60,6 +62,35 @@ const ANALYSIS_ONLY: LeadIntent[] = ["patterns", "examples", "explain"];
 /** A question about customer needs, possibly narrowed to a source or Virtuell: answered from the needs analysis. */
 const NEEDS_ONLY: LeadIntent[] = ["needs", "examples", "explain", "source", "virtual"];
 
+/** "Mia Petterssons", "Lars" → "Lars" (Swedish genitive). */
+export function genitive(name: string) {
+  return /[sxz]$/i.test(name) ? name : `${name}s`;
+}
+
+/**
+ * What a seller's analysis step covers: the seller, the period, how many of the seller's dialogues lack an
+ * analysis and in which inboxes – and, honestly, when a whole shared inbox is analysed (ADR-053, V1).
+ */
+function sellerDetail(
+  seller: string,
+  input: GapInput,
+  inboxIds: string[],
+  nameOf: Map<string, string>,
+  analyse: Gaps["analyse"],
+  needs: Gaps["needs"],
+): string {
+  const period = input.period.preset === "custom" ? periodLabel(input.period.from, input.period.to) : input.period.label.toLowerCase();
+  const count = analyse
+    ? analyse.missing === analyse.eligible
+      ? `${analyse.eligible} ${analyse.eligible === 1 ? "dialog" : "dialoger"}`
+      : `${analyse.missing} av ${analyse.eligible} dialoger saknar analys`
+    : `kundbehov i ${needs!.missing} ${needs!.missing === 1 ? "lead" : "leads"}`;
+  const inboxes = names(inboxIds.map((id) => nameOf.get(id) ?? id));
+  const others = input.rows.filter((r) => inboxIds.includes(r.inboxId) && r.status === "registered_reply" && r.sellerMessages > 0 && r.responderId !== input.sellerId).length;
+  const whole = others > 0 ? ` Hela ${inboxIds.length === 1 ? "inkorgen" : "inkorgarna"} analyseras för perioden, även andra säljares dialoger.` : "";
+  return `${seller} · ${period} · ${count} · ${inboxes}. Aktuella analyser återanvänds.${whole}`;
+}
+
 function names(list: string[]) {
   return list.length <= 2 ? list.join(" och ") : `${list.slice(0, -1).join(", ")} och ${list[list.length - 1]}`;
 }
@@ -93,9 +124,11 @@ export function findGaps(input: GapInput): Gaps {
   const needsOnly = !!input.needs && input.intents.includes("needs") && input.intents.every((i) => NEEDS_ONLY.includes(i));
   // Nothing fetched yet: whether the dialogues need an analysis is only known afterwards.
   const analyseAfterFetch = notFetched && (!!analyses || !!input.needs) && input.canAnalyse;
-  // Alla leads: no analysis step – the analysis is made per region (ADR-053).
+  // Alla leads: no analysis step – the analysis is made per region (ADR-053). A seller's own dialogues
+  // are no combined reading of the business: they can be analysed from any selection (their inboxes only).
   const perRegion = !input.scope.regionId && !input.scope.inboxId;
-  const canAnalyse = input.canAnalyse && !perRegion;
+  const seller = input.sellerId ? (input.sellerName ?? "Säljaren") : null;
+  const canAnalyse = input.canAnalyse && (!perRegion || !!seller);
 
   const periodText = periodLabel(period.from, period.to);
   const steps: LeadActionReference["steps"] = [];
@@ -118,7 +151,9 @@ export function findGaps(input: GapInput): Gaps {
     steps.push({
       action: "analyse",
       label: "Analysera dialogerna",
-      detail: what
+      detail: seller && (analyse || needsGap)
+        ? sellerDetail(seller, input, inboxIds, nameOf, analyse, needsOnly ? needsGap : analyse ? null : needsGap)
+        : what
         ? input.scope.inboxId
           ? `${what} i ${names(inboxIds.map((id) => nameOf.get(id) ?? id))} analyseras med AI, med samma regler och kostnadsgränser som i Leadanalys.`
           : `${what} i ${input.selection} analyseras med AI, inkorg för inkorg, med samma regler och kostnadsgränser som i Leadanalys. Aktuella analyser återanvänds.`
@@ -127,7 +162,15 @@ export function findGaps(input: GapInput): Gaps {
     });
   }
   const action: LeadActionReference | null = steps.length
-    ? { kind: "lead_action", id: "action", steps, scope: { ...input.scope, preset: "custom", from: period.from, to: period.to }, question: input.question, ...(input.createdAt ? { createdAt: input.createdAt } : {}) }
+    ? {
+        kind: "lead_action",
+        id: "action",
+        steps,
+        // A seller's selection: the analysis covers only the inboxes of the seller's dialogues (ADR-053).
+        scope: { ...input.scope, ...(input.sellerId ? { sellerId: input.sellerId } : {}), preset: "custom", from: period.from, to: period.to },
+        question: input.question,
+        ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+      }
     : null;
 
   // --- Deterministic answers: nothing useful can be said without the step -------
@@ -153,7 +196,9 @@ export function findGaps(input: GapInput): Gaps {
     answer = input.canAnalyse
       ? tooLong
         ? `Jag har leadstatistiken för ${periodText} i ${input.selection}, men dialogerna är inte analyserade ännu, och perioden är för lång för en analys (högst ${input.maxDays} dagar). Välj en kortare period, till exempel senaste 30 dagarna.`
-        : `Jag har leadstatistiken för ${periodText} i ${input.selection}, men dialogerna är inte analyserade ännu (${analyse.eligible} ${analyse.eligible === 1 ? "dialog" : "dialoger"} med säljarsvar). Vill du analysera dem så att jag kan titta på återkommande styrkor och utvecklingsområden?${fetchFirst}${order}`
+        : seller
+          ? `Jag har leadstatistiken för ${seller} i ${input.selection}, ${periodText}, men ${genitive(seller)} dialoger är inte AI-analyserade ännu (${analyse.eligible} ${analyse.eligible === 1 ? "dialog" : "dialoger"} där ${seller} gav första svaret). Vill du analysera dem? Då kan jag beskriva hur ${seller} kommunicerar med kunderna, vad som fungerar och vad som kan utvecklas, med exempel ur dialogerna.${fetchFirst}${order}`
+          : `Jag har leadstatistiken för ${periodText} i ${input.selection}, men dialogerna är inte analyserade ännu (${analyse.eligible} ${analyse.eligible === 1 ? "dialog" : "dialoger"} med säljarsvar). Vill du analysera dem så att jag kan titta på återkommande styrkor och utvecklingsområden?${fetchFirst}${order}`
       : `Jag har leadstatistiken för ${periodText} i ${input.selection}, men dialogerna är inte analyserade, och AI-analysen av dialogerna är inte aktiverad i den här miljön.`;
   }
 

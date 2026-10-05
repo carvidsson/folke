@@ -3,7 +3,8 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { ChatRequest, ChatStreamEvent } from "@/lib/chat/protocol";
-import type { Assistant, LeadActionReference, LeadSetReference, LeadSourceReference, MessageSource, VerifiedFact } from "@/lib/domain/types";
+import type { Assistant, LeadActionReference, LeadPromptsReference, LeadSetReference, LeadSourceReference, MessageSource, VerifiedFact } from "@/lib/domain/types";
+import { periodLabel } from "@/lib/leads/periods";
 import { leadChatStateSchema, type LeadChatState } from "@/lib/leads/chat";
 import { getAIProvider } from "@/server/ai";
 import { stripCitationMarkers, verifyCitations } from "@/server/ai/citations";
@@ -25,7 +26,8 @@ import { MAX_SYNC_DAYS } from "@/server/leads/service";
 
 import { buildBrief, needsAnalyses, modulesFor, type Brief } from "./brief";
 import { usedFacts, visibleFacts } from "./facts";
-import { findGaps } from "./gaps";
+import { findGaps, genitive } from "./gaps";
+import { parseQuestion } from "./intent";
 import { loadEntities, loadSelection, stockholmToday } from "./load";
 import { buildLeadSystemPrompt } from "./prompt";
 import { assertNoIdentifiers, pseudonymsFor, streamRevealer } from "./pseudonyms";
@@ -146,6 +148,16 @@ export async function handleLeadChat({
   const loaded = await loadSelection(supabase, { state: turn.state, intents: turn.intents, examples: turn.examples, entities, today });
   const pseudonyms = pseudonymsFor(entities.sellers, entities.knownNames);
   const state = loaded.input.state;
+  const seller = loaded.input.seller;
+
+  // "Jag vill veta mer om en säljare" (Fråga Folke): choose a seller, then what to ask – without AI.
+  if (turn.request === "seller_intro") {
+    const intro = sellerIntro(loaded.input, entities.sellers);
+    return fixedAnswer(intro.text, { ...state, intents: [] }, intro.prompts ? [intro.prompts] : [], { kind: "seller_intro", seller: !!seller });
+  }
+  // "Kan du analysera dessa?": the step for exactly the previous question's selection, and after the
+  // analysis "Ställ frågan igen" asks that question – not this one.
+  const original = turn.request === "analyse" ? await previousQuestion(supabase, conversation.id, storedMessage.id) : null;
 
   // Missing material: why, and the steps the user can choose (never started by Folke).
   const gaps = findGaps({
@@ -155,11 +167,12 @@ export async function handleLeadChat({
     rows: loaded.input.rows,
     analyses: needsAnalyses(modulesFor(turn.intents, !!loaded.input.seller)) && !(turn.intents.includes("response_time") && turn.intents.includes("examples")) ? loaded.input.analyses : null,
     needs: loaded.input.needs ?? null,
-    sellerId: loaded.input.seller?.id ?? null,
+    sellerId: seller?.id ?? null,
+    sellerName: seller?.name ?? null,
     intents: turn.intents,
     period: loaded.input.period,
     scope: { regionId: state.regionId, inboxId: state.inboxId },
-    question: message.content,
+    question: original ?? message.content,
     canSync: hubSpotConfigured(),
     canAnalyse: leadAnalysisExternalAllowed(),
     maxDays: MAX_SYNC_DAYS,
@@ -167,6 +180,14 @@ export async function handleLeadChat({
     createdAt: now.toISOString(),
   });
   const actionSources: MessageSource[] = gaps.action ? [gaps.action] : [];
+  if (turn.request === "analyse" && gaps.action) {
+    const steps = gaps.action.steps;
+    const analyseStep = steps.find((s) => s.action === "analyse");
+    const text = analyseStep
+      ? `Ja. Det här är underlaget som analyseras: ${analyseStep.detail}${steps.length > 1 ? " Perioden behöver först hämtas från HubSpot – stegen står i den ordning de behöver göras." : ""} Klicka på "Analysera dialogerna" nedan. Analysen körs på servern och fortsätter även om du lämnar chatten. När den är klar kan du ställa frågan igen.`
+      : `Perioden behöver först hämtas från HubSpot för ${loaded.input.selection}. Klicka på knappen nedan.`;
+    return fixedAnswer(text, state, [...actionSources], { kind: "analyse_request", gap: steps.map((s) => s.action).join("+"), seller: !!seller });
+  }
 
   // Earlier verified facts: from the answers the history keeps, still visible to the user.
   const history = await loadHistory(supabase, conversation.id);
@@ -175,7 +196,10 @@ export async function handleLeadChat({
     ...loaded.input,
     widenedFrom: widenedLabel(turn.widenedFrom, entities, pseudonyms),
     earlierFacts,
-    actionNote: gaps.note,
+    actionNote:
+      turn.request === "analyse" && !gaps.action
+        ? "Användaren bad om analys av samma urval, men dialogerna i urvalet är redan analyserade. Säg det kort och besvara sedan den föregående frågan i konversationen utifrån underlaget."
+        : gaps.note,
     pseudonyms,
     now,
   });
@@ -393,5 +417,73 @@ async function loadHistory(supabase: SupabaseClient, conversationId: string): Pr
     messages: kept.map(({ role, content }) => ({ role, content: role === "assistant" ? stripCitationMarkers(content) : content })),
     // Oldest first: the brief lists the newest of each measure.
     facts: kept.flatMap((m) => (m.role === "assistant" ? (m.sources ?? []).flatMap((s) => (s.kind === "lead_basis" ? (s.facts ?? []) : [])) : [])),
+  };
+}
+
+/** The question before "Kan du analysera dessa?" (the latest user question that is not itself such a request). */
+async function previousQuestion(supabase: SupabaseClient, conversationId: string, currentId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from("messages")
+    .select("id, content")
+    .eq("conversation_id", conversationId)
+    .eq("role", "user")
+    .order("created_at", { ascending: false })
+    .limit(8)
+    .returns<{ id: string; content: string }[]>();
+  const today = stockholmToday();
+  for (const m of data ?? []) {
+    if (m.id === currentId) continue;
+    const parsed = parseQuestion(m.content, today);
+    if (!parsed.analyseRequest && !parsed.sellerIntro) return m.content.slice(0, 2000);
+  }
+  return null;
+}
+
+/** Most sellers listed as choices; the user can always type a name. */
+const SELLER_CHOICES = 12;
+
+/**
+ * "Jag vill veta mer om en säljare": without a seller, the sellers who gave the first reply in the
+ * selection and period (from the leads the user may see) as choices; with one, questions Leadanalys can
+ * answer about that seller. Fixed text, no AI; the names are the user's own view and never sent to a model.
+ */
+export function sellerIntro(
+  input: Awaited<ReturnType<typeof loadSelection>>["input"],
+  sellers: { id: string; name: string }[],
+): { text: string; prompts: LeadPromptsReference | null } {
+  const period = periodLabel(input.period.from, input.period.to);
+  const prompts = (list: string[]): LeadPromptsReference => ({ kind: "lead_prompts", id: "prompts", prompts: list });
+  if (!input.seller) {
+    const first = new Map<string, number>();
+    for (const r of input.rows) if (r.responderId) first.set(r.responderId, (first.get(r.responderId) ?? 0) + 1);
+    const known = sellers.filter((s) => first.has(s.id)).sort((a, b) => first.get(b.id)! - first.get(a.id)! || a.name.localeCompare(b.name, "sv"));
+    if (!known.length) {
+      return { text: `Vilken säljare vill du veta mer om? Jag hittar inga registrerade säljsvar i ${input.selection} under ${period}, så skriv gärna säljarens namn.`, prompts: null };
+    }
+    return {
+      text: `Vilken säljare vill du veta mer om? Här är säljarna som gav första svaret på leads i ${input.selection} under ${period}${known.length > SELLER_CHOICES ? ` (de ${SELLER_CHOICES} med flest)` : ""}. Välj en, eller skriv namnet.`,
+      prompts: prompts(known.slice(0, SELLER_CHOICES).map((s) => `Jag vill veta mer om ${s.name}`)),
+    };
+  }
+  const name = input.seller.name;
+  const firstRows = input.rows.filter((r) => r.responderId === input.seller!.id);
+  const eligible = firstRows.filter((r) => r.status === "registered_reply" && r.sellerMessages > 0);
+  const analysed = input.analyses ? eligible.filter((r) => input.analyses!.has(r.threadId)).length : 0;
+  const status = eligible.length
+    ? analysed === eligible.length
+      ? ` Alla ${eligible.length} dialoger med säljsvar är AI-analyserade.`
+      : ` ${analysed} av ${eligible.length} dialoger med säljsvar är AI-analyserade – frågor om kommunikation och arbetssätt kan kräva att resten analyseras först, och då erbjuder jag det.`
+    : "";
+  return {
+    text: `Vad vill du veta om ${name}? Under ${period} gav ${name} första svaret på ${firstRows.length} ${firstRows.length === 1 ? "lead" : "leads"} i ${input.selection}.${status} Välj en fråga nedan eller skriv en egen.`,
+    prompts: prompts([
+      `Hur kommunicerar ${name} med kunderna?`,
+      `Vad gör ${name} bra, och vad kan utvecklas?`,
+      `Hur väl driver ${name} dialogerna mot nästa steg?`,
+      `Hur hanterar ${name} kunder när bilen inte finns kvar?`,
+      `Vilka behov och frågor har ${genitive(name)} kunder?`,
+      `Hur snabbt svarar ${name} kunderna?`,
+      `Vad kan vara bra att ta upp i nästa coaching med ${name}?`,
+    ]),
   };
 }

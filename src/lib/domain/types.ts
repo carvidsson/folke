@@ -246,14 +246,25 @@ export interface LeadActionReference {
   kind: "lead_action";
   id: string;
   steps: { action: "sync" | "analyse"; label: string; detail: string; inboxIds: string[] }[];
-  scope: { regionId: string | null; inboxId: string | null; preset: "custom"; from: string; to: string };
+  /** sellerId: a seller's selection – the analysis covers only the inboxes in the analyse step (ADR-053). */
+  scope: { regionId: string | null; inboxId: string | null; sellerId?: string | null; preset: "custom"; from: string; to: string };
   question: string;
   /** When the steps were offered: an analysis job started after this belongs to them (ADR-051). */
   createdAt?: string;
 }
 
-/** Everything an assistant answer can show under it: document excerpts, or (Leadanalys) leads, lead sets, the basis and actions. */
-export type MessageSource = SourceReference | LeadSourceReference | LeadSetReference | LeadBasisReference | LeadActionReference;
+/**
+ * Questions the user can ask next with one click (Leadanalys, "Jag vill veta mer om en säljare"): only
+ * prompts the chat itself sends as the user's next message – never an action of their own.
+ */
+export interface LeadPromptsReference {
+  kind: "lead_prompts";
+  id: string;
+  prompts: string[];
+}
+
+/** Everything an assistant answer can show under it: document excerpts, or (Leadanalys) leads, lead sets, the basis, actions and suggested questions. */
+export type MessageSource = SourceReference | LeadSourceReference | LeadSetReference | LeadBasisReference | LeadActionReference | LeadPromptsReference;
 
 export function isDocumentSource(s: MessageSource): s is SourceReference {
   return s.kind === undefined || s.kind === "document";

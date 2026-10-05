@@ -93,6 +93,15 @@ describe("lead analysis actions", () => {
     await expect(actions.inboxAnalysisStatusAction({ inboxId: "900002" })).resolves.toEqual({ ok: false, error: "Inkorgen hittades inte." });
     await expect(actions.syncLeadsAction({ regionId: REGION_B })).resolves.toEqual({ ok: false, error: "Urvalet hittades inte." });
     await expect(actions.regionAnalysisStatusAction({ regionId: REGION_B })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+    // A seller's analysis (some inboxes of the selection, 2026-10-06): never an inbox outside the user's
+    // own selection – not in another region, not from Alla leads, not with a malformed id.
+    await expect(actions.regionAnalysisStatusAction({ regionId: REGION_A, inboxIds: ["900002"] })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+    await expect(actions.regionAnalysisStatusAction({ inboxIds: ["900002"] })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+    await expect(actions.regionAnalysisStatusAction({ inboxIds: ["900001", "900002"] })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+    await expect(actions.regionAnalysisStatusAction({ inboxIds: ["../x"] })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+    await expect(actions.regionAnalysisStatusAction({ inboxIds: [] })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+    // Alla leads without a seller's inboxes is no analysis scope.
+    await expect(actions.regionAnalysisStatusAction({})).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
     await expect(actions.evidenceAction({ regionId: REGION_B }, { filter: "no_reply_open" })).resolves.toEqual({ ok: false, error: "Urvalet hittades inte." });
     // A sync request naming another inbox only touches what the scope allows.
     const result = await actions.syncLeadsAction({ regionId: REGION_A }, ["900002"]);

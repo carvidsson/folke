@@ -34,7 +34,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *
  * For a region (ort) the step analyses the whole region in one click (ADR-053): the server runs its
  * inboxes that lack a current analysis and then the region's combined analysis; the step shows how many
- * inboxes are done. Alla leads gets no analysis step.
+ * inboxes are done. For a seller's selection it analyses only the inboxes of the seller's dialogues, with
+ * no region summary. Alla leads gets no analysis step, except for a seller's own dialogues.
  */
 export function LeadActions({ action }: { action: LeadActionReference }) {
   const chat = useChatActions();
@@ -51,7 +52,17 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   }, []);
 
   const scopeOf = (inboxId: string) => ({ inboxId, preset: "custom", from: action.scope.from, to: action.scope.to });
-  const regionScope = action.scope.regionId && !action.scope.inboxId ? { regionId: action.scope.regionId, preset: "custom", from: action.scope.from, to: action.scope.to } : null;
+  // A seller's selection analyses only the inboxes of the seller's dialogues (the step's inboxes), with no
+  // region summary; a region analyses its inboxes and writes the region's combined analysis (ADR-053).
+  const targeted = !!action.scope.sellerId && !action.scope.inboxId;
+  const batch = !action.scope.inboxId && (!!action.scope.regionId || targeted);
+  const batchScope = (i: number) => ({
+    regionId: action.scope.regionId,
+    preset: "custom",
+    from: action.scope.from,
+    to: action.scope.to,
+    ...(targeted ? { inboxIds: action.steps[i].inboxIds } : {}),
+  });
   /** A job that belongs to these steps: started after they were offered. */
   const ours = (s: InboxAnalysisState | null) => !!s?.job && (!action.createdAt || s.job.startedAt >= action.createdAt);
 
@@ -78,9 +89,9 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   useEffect(() => {
     action.steps.forEach((step, i) => {
       if (step.action !== "analyse") return;
-      if (regionScope) {
+      if (batch) {
         void (async () => {
-          const r = await regionAnalysisStatusAction(regionScope).catch(() => null);
+          const r = await regionAnalysisStatusAction(batchScope(i)).catch(() => null);
           if (!alive.current || !r?.ok) return;
           if (r.data.running || r.data.summarising) await followRegion(i, r.data, 0);
         })();
@@ -134,12 +145,16 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
         set(i, {
           status: "running",
           progress: { done: s.done, total: s.total },
-          message: s.summarising ? "Dialogerna i alla inkorgar är analyserade. Folke sammanställer nu inkorgarna och orten – strax klart." : "Analysen pågår på servern, två inkorgar i taget. Du kan lämna chatten – den fortsätter.",
+          message: s.summarising
+            ? targeted
+              ? "Dialogerna är analyserade. Folke sammanställer nu resultatet – strax klart."
+              : "Dialogerna i alla inkorgar är analyserade. Folke sammanställer nu inkorgarna och orten – strax klart."
+            : "Analysen pågår på servern. Du kan lämna chatten – den fortsätter.",
         });
       } else set(i, { status: "running", message: "Folke når inte servern just nu och försöker igen." });
       await sleep(POLL_MS);
       if (!alive.current) return;
-      const r = await regionAnalysisStatusAction(regionScope!).catch(() => null);
+      const r = await regionAnalysisStatusAction(batchScope(i)).catch(() => null);
       s = r?.ok ? r.data : null;
     }
     const failed = s.inboxes.filter((x) => x.state === "failed");
@@ -150,14 +165,16 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
       progress: { done: s.done, total: s.total },
       message: left
         ? `${s.done} av ${s.total} inkorgar är analyserade.${failed.length ? ` Det gick inte för ${failed.map((x) => x.name).join(", ")}.` : ""} Klicka igen för att fortsätta – analyserade inkorgar återanvänds.`
-        : `Ortens ${s.total === 1 ? "inkorg är analyserad" : `${s.total} inkorgar är analyserade`}.`,
+        : targeted
+          ? "Dialogerna är analyserade."
+          : `Ortens ${s.total === 1 ? "inkorg är analyserad" : `${s.total} inkorgar är analyserade`}.`,
     });
   }
 
   async function analyseRegion(i: number) {
-    set(i, { status: "running", message: "Startar analysen av orten…" });
+    set(i, { status: "running", message: targeted ? "Startar analysen…" : "Startar analysen av orten…" });
     const startedAt = Date.now();
-    const started = await startRegionAnalysisAction(regionScope!).catch(() => null);
+    const started = await startRegionAnalysisAction(batchScope(i)).catch(() => null);
     if (!alive.current) return;
     if (started && !started.ok) return set(i, { status: "error", message: started.error });
     // A lost answer is fine: the analysis may have started – followRegion() reads the server.
@@ -165,7 +182,7 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   }
 
   async function analyse(i: number) {
-    if (regionScope) return analyseRegion(i);
+    if (batch) return analyseRegion(i);
     const step = action.steps[i];
     let analysed = 0;
     let left = 0;

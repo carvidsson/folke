@@ -521,7 +521,12 @@ export function buildBrief(input: BriefInput): Brief {
     const lines: string[] = [
       renderMetric(reg.add({ label: "AI-analyserade dialoger", value: total, of: eligibleCount, population: seller ? `leads där ${sellerAlias} gav första svaret, med registrerat säljsvar och minst ett säljarmeddelande` : "leads med registrerat säljsvar och minst ett säljarmeddelande i urvalet", origin: "klassificering", definition: `analysmetod ${input.analysisVersion}` })),
     ];
-    if (total < MIN_ANALYSED) lines.push(`- Litet underlag: färre än ${MIN_ANALYSED} AI-analyserade dialoger. Beskriv enskilda exempel men dra inga slutsatser om mönster.`);
+    // No threshold: the number of dialogues decides how firmly a conclusion may be put, not whether there is one.
+    if (total > 0) {
+      lines.push(
+        `- Underlaget är ${total} AI-analyserade ${total === 1 ? "dialog" : "dialoger"}${seller ? ` där ${sellerAlias} gav första svaret` : ""}. Säg det ("baserat på ${total} analyserade dialoger"). Ange alltid hur många av dem något gäller ("x av ${total}"). Kalla något återkommande, eller säg att någon "brukar" eller "generellt" gör något, bara när samma sak syns i flera av dialogerna och i en stor del av dem. Med få dialoger: beskriv konkreta iakttagelser i just de här dialogerna, med exempel.`,
+      );
+    }
     // Where the analysis exists: a region can be analysed in one inbox only.
     if (input.scopeType !== "inbox" && !seller) {
       const perInbox = inboxes

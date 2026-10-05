@@ -207,10 +207,23 @@ const RECENT_MS = 60 * 60_000;
 /** The combined analysis is written right after the last inbox; after this long it is no longer expected. */
 const SUMMARY_WAIT_MS = 3 * 60_000;
 
+const subsetInput = z.object({ inboxIds: z.array(id).min(1).max(20).optional() });
+
+/**
+ * A region – or, from a seller's selection in the chat, some of the selection's inboxes (`inboxIds`).
+ * The inboxes are kept only as far as the user's own selection (resolved through RLS) contains them; one
+ * that is not there makes the whole request not found. A subset never gets the region's combined analysis.
+ */
 async function regionAndPeriod(raw: unknown) {
   const resolved = await scopeAndPeriod(raw);
-  if (!resolved || resolved.data.scope.type !== "region") return null;
-  return resolved;
+  if (!resolved || resolved.data.scope.type === "inbox") return null;
+  const parsed = subsetInput.safeParse(raw);
+  if (!parsed.success) return null;
+  const wanted = parsed.data.inboxIds ? [...new Set(parsed.data.inboxIds)] : null;
+  if (!wanted) return resolved.data.scope.type === "region" ? { ...resolved, subset: false } : null;
+  const scopeInboxes = resolved.data.scopeInboxes.filter((i) => wanted.includes(i.id));
+  if (scopeInboxes.length !== wanted.length) return null;
+  return { data: { ...resolved.data, scopeInboxes }, period: resolved.period, subset: true };
 }
 
 /** "Utan region" has no combined analysis; a real region does. */
@@ -222,9 +235,9 @@ interface RegionStateFull extends RegionAnalysisState {
   summaryOutdated: boolean;
 }
 
-async function regionState(data: ScopeData, period: Period, now = new Date()): Promise<RegionStateFull> {
+async function regionState(data: ScopeData, period: Period, subset: boolean, now = new Date()): Promise<RegionStateFull> {
   const coverage = (await analysisCoverage(data, period, today(), now)).filter((c) => c.relevant);
-  const region = summaryRegion(data);
+  const region = subset ? null : summaryRegion(data);
   const [jobs, runs] = await Promise.all([
     Promise.all(coverage.map((c) => latestAnalysisJob(jobKey(c.id, period)).catch(() => null))),
     region ? listRuns({ type: "region", regionId: region.id }).catch(() => []) : Promise.resolve([]),
@@ -279,17 +292,17 @@ export async function startRegionAnalysisAction(raw: unknown): Promise<LeadActio
   if (!hubSpotConfigured()) return { ok: false, error: hubSpotMessage(new HubSpotError("not_configured")) };
   const resolved = await regionAndPeriod(raw);
   if (!resolved) return { ok: false, error: "Orten hittades inte." };
-  const { data, period } = resolved;
+  const { data, period, subset } = resolved;
   if (daysBetween(period.from, period.to) > MAX_SYNC_DAYS) return { ok: false, error: `Välj en period på högst ${MAX_SYNC_DAYS} dagar.` };
   let state: RegionStateFull;
   try {
-    state = await regionState(data, period);
+    state = await regionState(data, period, subset);
   } catch {
     return { ok: false, error: "Analysen kunde inte startas. Försök igen." };
   }
   if (state.running || state.summarising) return { ok: true, data: { ...publicState(state), alreadyRunning: true } };
   const todo = state.coverage.filter((c) => !c.current).map((c) => data.scopeInboxes.find((i) => i.id === c.id)!);
-  const region = summaryRegion(data);
+  const region = subset ? null : summaryRegion(data);
   if (!todo.length && !(region && state.summaryOutdated)) return { ok: true, data: publicState(state) };
   if (todo.length) {
     const supabase = await createSupabaseServerClient();
@@ -299,7 +312,7 @@ export async function startRegionAnalysisAction(raw: unknown): Promise<LeadActio
       actorId: session.user.id,
       targetType: "lead_scope",
       targetId: data.scope.regionId ?? "none",
-      metadata: { from: period.from, to: period.to, inboxes: todo.length, reused: state.total - todo.length },
+      metadata: { from: period.from, to: period.to, inboxes: todo.length, reused: state.total - todo.length, subset },
     });
     const queued = new Set(todo.map((i) => i.id));
     return {
@@ -316,7 +329,7 @@ export async function startRegionAnalysisAction(raw: unknown): Promise<LeadActio
     targetId: region!.id,
     metadata: { from: period.from, to: period.to, dialogues: run.result.run.dialoguesAnalysed, model: run.result.run.model, costUsd: run.result.run.costUsd },
   });
-  return { ok: true, data: publicState(await regionState(data, period)) };
+  return { ok: true, data: publicState(await regionState(data, period, subset)) };
 }
 
 /** The progress of a region's analysis – read from the database, so it survives reloads. */
@@ -325,7 +338,7 @@ export async function regionAnalysisStatusAction(raw: unknown): Promise<LeadActi
   const resolved = await regionAndPeriod(raw);
   if (!resolved) return { ok: false, error: "Orten hittades inte." };
   try {
-    return { ok: true, data: publicState(await regionState(resolved.data, resolved.period)) };
+    return { ok: true, data: publicState(await regionState(resolved.data, resolved.period, resolved.subset)) };
   } catch {
     return { ok: false, error: "Status kunde inte hämtas." };
   }

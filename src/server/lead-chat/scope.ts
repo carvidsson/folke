@@ -34,6 +34,11 @@ export type TurnResolution =
       changedScope: boolean;
       /** The selection before a widening ("resten", "övriga", "totalt"), so the brief can say what changed. */
       widenedFrom: LeadChatState | null;
+      /**
+       * "analyse": "Kan du analysera dessa?" – the previous question's selection and subject; Folke offers the
+       * analysis (never starts it). "seller_intro": "Jag vill veta mer om en säljare / om Mia" – help on.
+       */
+      request: "analyse" | "seller_intro" | null;
     }
   | { kind: "clarify"; text: string; state: LeadChatState | null }
   | { kind: "not_found"; text: string; state: LeadChatState | null }
@@ -280,6 +285,13 @@ export function resolveTurn(input: {
     intents = base.intents.some((i) => i === "examples" || i === "patterns") ? [...new Set([...base.intents, "patterns" as const])] : base.intents;
   }
 
+  // "Analysera dessa": exactly the previous selection and subject, with the analysed dialogues loaded.
+  // "Veta mer om" is a seller intro only about a seller ("en säljare", or a named one) – not a region or inbox.
+  const sellerIntro = parsed.sellerIntro && (/säljar/i.test(text) || sellers.length === 1) && !inboxMatch.found.length && !regions.found.length;
+  const request = parsed.analyseRequest ? "analyse" : sellerIntro ? "seller_intro" : null;
+  if (request === "analyse") intents = [...new Set([...(base?.intents.length ? base.intents : []), "patterns" as const])];
+  if (request === "seller_intro") intents = ["patterns"];
+
   const period = parsed.period
     ? resolvePeriod(parsed.period.preset, today, parsed.period.from, parsed.period.to)
     : resolvePeriod(base?.preset, today, base?.from, base?.to);
@@ -292,6 +304,7 @@ export function resolveTurn(input: {
     widenedFrom: widened && base ? { ...base, ...before } : null,
     intents,
     examples,
+    request,
     state: {
       regionId,
       inboxId,
@@ -299,7 +312,8 @@ export function resolveTurn(input: {
       preset: period.preset,
       from: period.from,
       to: period.to,
-      intents,
+      // A seller intro is no subject of its own: the next question chooses one.
+      intents: request === "seller_intro" ? [] : intents,
       comparison,
       focus: parsed.sameKind || (!parsed.intents.length && base) ? (base?.focus ?? []) : [],
       needsFocus,

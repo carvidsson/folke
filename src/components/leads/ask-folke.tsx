@@ -1,17 +1,21 @@
 "use client";
 
-import { MessageSquareText } from "lucide-react";
+import { MessageSquareText, UserRound } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { setPendingPrompt } from "@/lib/chat/pending-prompt";
 import type { LeadChatContext } from "@/lib/leads/chat";
 
 /**
  * "Fråga Folke" (ADR-050): opens a new chat with the Leadanalys assistant, starting from the page's
  * selection. The selection is help only – the server re-resolves it against the user's lead access.
+ * "Jag vill veta mer om en säljare" starts the same chat: Folke offers the selection's sellers and then
+ * questions it can answer about the chosen one.
  */
+export const SELLER_INTRO_PROMPT = "Jag vill veta mer om en säljare";
+
 export function useAskFolke(assistantSlug: string | null) {
   const router = useRouter();
   if (!assistantSlug) return null;
@@ -45,6 +49,11 @@ export function AskFolkeMenu({ assistantSlug, scopeName, context }: { assistantS
             {q}
           </DropdownMenuItem>
         ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => ask(SELLER_INTRO_PROMPT, context)}>
+          <UserRound className="size-4" />
+          {SELLER_INTRO_PROMPT}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
