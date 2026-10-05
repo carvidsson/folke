@@ -52,13 +52,15 @@ describe("periods", () => {
   const today = "2026-10-03";
   it("resolves presets and rejects bad custom input", () => {
     expect(resolvePeriod("7d", today)).toMatchObject({ from: "2026-09-27", to: "2026-10-03" });
-    expect(resolvePeriod(undefined, today)).toMatchObject({ preset: "30d", from: "2026-09-04", to: "2026-10-03" });
+    // The default is the last 7 days; the last 30 days is a preset of its own.
+    expect(resolvePeriod(undefined, today)).toMatchObject({ preset: "7d", from: "2026-09-27", to: "2026-10-03" });
+    expect(resolvePeriod("30d", today)).toMatchObject({ preset: "30d", from: "2026-09-04", to: "2026-10-03" });
     expect(resolvePeriod("this_month", today)).toMatchObject({ from: "2026-10-01", to: "2026-10-03" });
     expect(resolvePeriod("last_month", today)).toMatchObject({ from: "2026-09-01", to: "2026-09-30" });
     expect(resolvePeriod("custom", today, "2026-09-10", "2026-09-20")).toMatchObject({ preset: "custom", from: "2026-09-10", to: "2026-09-20" });
-    // Future, reversed and invalid dates fall back to the last 30 days.
+    // Future, reversed and invalid dates fall back to the default, the last 7 days.
     for (const [f, t] of [["2026-09-10", "2026-11-01"], ["2026-09-20", "2026-09-10"], ["2026-02-31", "2026-03-01"]]) {
-      expect(resolvePeriod("custom", today, f, t).preset).toBe("30d");
+      expect(resolvePeriod("custom", today, f, t).preset).toBe("7d");
     }
   });
 

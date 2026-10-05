@@ -48,7 +48,8 @@ export interface LeadAnalysisProps {
 /** Query string for a scope and period. */
 function href(scope: { regionId?: string | null; inboxId?: string | null }, period: { preset: string; from: string; to: string }) {
   const p = new URLSearchParams();
-  if (period.preset !== "30d") p.set("period", period.preset);
+  // The default period (last 7 days) is left out of the address.
+  if (period.preset !== "7d") p.set("period", period.preset);
   if (period.preset === "custom") {
     p.set("from", period.from);
     p.set("to", period.to);
@@ -67,6 +68,12 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
   const [evidence, setEvidence] = useState<EvidenceRequest | null>(null);
   const ask = useAskFolke(askFolke);
   const [custom, setCustom] = useState({ from: period.from, to: period.to });
+  // The date fields follow the period shown (a preset chosen in the list, or a link), not only the first one.
+  const [customFor, setCustomFor] = useState(`${period.from}|${period.to}`);
+  if (customFor !== `${period.from}|${period.to}`) {
+    setCustomFor(`${period.from}|${period.to}`);
+    setCustom({ from: period.from, to: period.to });
+  }
   // Until most dialogues are AI-analysed, the HubSpot facts lead the page and the observations come later.
   const observationsFirst = overview.ai.eligible > 0 && overview.ai.analysed / overview.ai.eligible >= 0.5;
 

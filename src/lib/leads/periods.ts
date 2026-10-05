@@ -38,12 +38,12 @@ export const PRESET_LABELS: Record<Exclude<PeriodPreset, "custom">, string> = {
   last_month: "Föregående månad",
 };
 
-/** `today` is the Stockholm date "YYYY-MM-DD". Invalid custom input falls back to the last 30 days. */
+/** `today` is the Stockholm date "YYYY-MM-DD". No preset, or invalid custom input, gives the default: the last 7 days. */
 export function resolvePeriod(preset: string | undefined, today: string, from?: string, to?: string): Period {
   const valid = (d?: string) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d) && iso(parse(d)) === d;
   switch (preset) {
-    case "7d":
-      return { preset, from: addDays(today, -6), to: today, label: PRESET_LABELS["7d"] };
+    case "30d":
+      return { preset, from: addDays(today, -29), to: today, label: PRESET_LABELS["30d"] };
     case "this_month":
       return { preset, from: `${today.slice(0, 7)}-01`, to: today, label: PRESET_LABELS.this_month };
     case "last_month": {
@@ -57,7 +57,7 @@ export function resolvePeriod(preset: string | undefined, today: string, from?: 
       }
       break;
   }
-  return { preset: "30d", from: addDays(today, -29), to: today, label: PRESET_LABELS["30d"] };
+  return { preset: "7d", from: addDays(today, -6), to: today, label: PRESET_LABELS["7d"] };
 }
 
 /**
