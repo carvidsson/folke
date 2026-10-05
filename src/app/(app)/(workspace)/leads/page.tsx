@@ -20,8 +20,9 @@ import { buildOverview, resolveScope } from "@/server/leads/overview";
 import { MAX_SYNC_DAYS } from "@/server/leads/service";
 
 export const metadata: Metadata = { title: "Leadanalys" };
-// Updating from HubSpot and the AI analysis run in server actions on this page.
-export const maxDuration = 300;
+// Updating from HubSpot and the AI analysis run in server actions on this page; a region analysis (ADR-053)
+// runs its inboxes after the response, within this limit (Vercel Pro, Fluid compute).
+export const maxDuration = 800;
 
 function today() {
   const t = stockholmTime(new Date());
@@ -79,7 +80,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const [overview, detail, ai, template, assistants] = await Promise.all([
     buildOverview(data, period, day),
     data.scope.type === "inbox" ? inboxDetail(data, period) : Promise.resolve(null),
-    aiState(data, period),
+    // No AI analysis on Alla leads (ADR-053): it is made per region and inbox.
+    data.scope.type === "all" ? Promise.resolve(null) : aiState(data, period),
     getThreadUrlTemplate(),
     listMyAssistants(),
   ]);
@@ -93,7 +95,6 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         detail={detail ? { sellers: detail.sellers, leads: detail.leads } : null}
         ai={ai}
         aiEnabled={leadAnalysisExternalAllowed()}
-        canSummariseAll={access.allRegions}
         linkConfigured={!!template}
         maxSyncDays={MAX_SYNC_DAYS}
         today={day}

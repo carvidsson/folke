@@ -247,7 +247,7 @@ function periodBounds(period: { from: string; to: string }) {
 export async function analyseInbox(
   input: { inbox: { id: string; name: string }; period: { from: string; to: string } },
   userId: string,
-  { store = leadStore(), now = new Date() }: { store?: LeadStore; now?: Date } = {},
+  { store = leadStore(), now = new Date(), deadline: until }: { store?: LeadStore; now?: Date; /** A batch (several inboxes) can end the analysis earlier. */ deadline?: number } = {},
 ): Promise<AIRunResult> {
   const model = defaultChatModel();
   const startedAt = new Date().toISOString();
@@ -307,7 +307,7 @@ export async function analyseInbox(
     const wantNeeds = new Set(needsSelected.map((r) => r.threadId));
 
     // Read the changed dialogues from HubSpot once (cached for 30 minutes), for either analysis.
-    const deadline = Date.now() + AI_TIME_BUDGET_MS;
+    const deadline = Math.min(Date.now() + AI_TIME_BUDGET_MS, until ?? Infinity);
     const toFetch = [...new Map([...toRead, ...needsSelected].map((r) => [r.threadId, r])).values()];
     const forms = toFetch.length ? await formNames() : new Map<string, string>();
     const leads = new Map<string, NormalizedLead>();
@@ -547,7 +547,7 @@ export async function analyseInbox(
  * is part of the result.
  */
 export async function summariseScope(
-  input: { scopeType: "region" | "all"; regionId: string | null; inboxIds: string[]; period: { from: string; to: string } },
+  input: { scopeType: "region"; regionId: string | null; inboxIds: string[]; period: { from: string; to: string } },
   userId: string,
   { store = leadStore(), now = new Date() }: { store?: LeadStore; now?: Date } = {},
 ): Promise<AIRunResult> {

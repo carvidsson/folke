@@ -69,7 +69,8 @@ const SCOPE = { regionId: REGION_A, preset: "30d" };
 const userActions = () => [
   () => actions.syncLeadsAction(SCOPE),
   () => actions.startInboxAnalysisAction({ inboxId: "900001" }),
-  () => actions.summariseScopeAction(SCOPE),
+  () => actions.startRegionAnalysisAction(SCOPE),
+  () => actions.regionAnalysisStatusAction(SCOPE),
   () => actions.inboxAnalysisStatusAction({ inboxId: "900001" }),
   () => actions.openRunAction("33333333-3333-4333-8333-333333333333"),
   () => actions.evidenceAction(SCOPE, { filter: "no_reply_open" }),
@@ -91,6 +92,7 @@ describe("lead analysis actions", () => {
     await expect(actions.startInboxAnalysisAction({ inboxId: "900002" })).resolves.toMatchObject({ ok: false });
     await expect(actions.inboxAnalysisStatusAction({ inboxId: "900002" })).resolves.toEqual({ ok: false, error: "Inkorgen hittades inte." });
     await expect(actions.syncLeadsAction({ regionId: REGION_B })).resolves.toEqual({ ok: false, error: "Urvalet hittades inte." });
+    await expect(actions.regionAnalysisStatusAction({ regionId: REGION_B })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
     await expect(actions.evidenceAction({ regionId: REGION_B }, { filter: "no_reply_open" })).resolves.toEqual({ ok: false, error: "Urvalet hittades inte." });
     // A sync request naming another inbox only touches what the scope allows.
     const result = await actions.syncLeadsAction({ regionId: REGION_A }, ["900002"]);
@@ -108,7 +110,7 @@ describe("lead analysis actions", () => {
     expect(hubSpotCalls).toBe(0);
   });
 
-  it("keep AI behind its flag and the all-regions summary behind all-region access", async () => {
+  it("keep AI behind its flag, and the region analysis for regions only – never all leads or one inbox", async () => {
     as("employee", { hasAccess: true, regionIds: [REGION_A] });
     await expect(actions.startInboxAnalysisAction({ inboxId: "900001" })).resolves.toEqual({ ok: false, error: "AI-analysen är inte aktiverad i den här miljön." });
     process.env.FOLKE_LEAD_ANALYSIS_AI = "on";
@@ -116,7 +118,10 @@ describe("lead analysis actions", () => {
     process.env.OPENAI_API_KEY = "sk-test-placeholder";
     resetServerEnvForTests();
     try {
-      await expect(actions.summariseScopeAction({})).resolves.toEqual({ ok: false, error: "Sammanvägningen för alla regioner kräver åtkomst till alla regioner." });
+      await expect(actions.startRegionAnalysisAction({})).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+      await expect(actions.startRegionAnalysisAction({ inboxId: "900001" })).resolves.toEqual({ ok: false, error: "Orten hittades inte." });
+      await expect(actions.startRegionAnalysisAction({ regionId: REGION_A, preset: "custom", from: "2026-01-01", to: "2026-09-30" })).resolves.toMatchObject({ ok: false, error: expect.stringMatching(/högst 92 dagar/) });
+      expect(hubSpotCalls).toBe(0);
     } finally {
       process.env.FOLKE_LEAD_ANALYSIS_AI = "off";
       process.env.FOLKE_AI_PROVIDER = "mock";

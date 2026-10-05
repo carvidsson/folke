@@ -131,7 +131,8 @@ export async function loadSelection(
     const eligible = rows.filter((r) => r.status === "registered_reply" && r.sellerMessages > 0 && (!seller || r.responderId === seller.id || r.ownerId === seller.id));
     const [loaded, runs] = await Promise.all([
       leadStore(supabase).loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, defaultChatModel().id),
-      modules.has("patterns") && !seller
+      // No combined reading for Alla leads (ADR-053): earlier "all" summaries are not used.
+      modules.has("patterns") && !seller && scopeType !== "all"
         ? listRuns({ type: scopeType, inboxId: inbox?.id ?? null, regionId: region?.id ?? null }, supabase)
         : Promise.resolve([]),
     ]);

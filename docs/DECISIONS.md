@@ -693,6 +693,32 @@ Fel som rättades under valideringen:
 
 ---
 
+### ADR-053 – AI-analys per ort, fakta på Alla leads
+
+**Sammanhang:**
+- AI-analysen gjordes inkorg för inkorg. En ort med fem inkorgar krävde fem klick och sedan "Gör sammanvägning".
+- På Alla leads visades AI:s kvalitativa bedömning, kundbehov och AI-observationer som om hela verksamheten vore en säljenhet. Orterna arbetar olika, och en sammanvägning över alla döljer det.
+
+**Beslut:**
+- **Alla leads är en verksamhetsöversikt med hårda data:** volym, svarstider, källor, märken, orter och trend. Ingen AI-analys, inga kundbehov, inga observationer ur AI-klassificeringen och ingen batchanalys. En diskret rad hänvisar till att analysen av kunddialoger görs per ort.
+- **Orten är den primära nivån för AI-analysen.** "Analysera dialogerna" på en ort analyserar ortens relevanta inkorgar för perioden i ett klick:
+  - Servern räknar ut vilka inkorgar som saknar aktuell analys (`analysisCoverage`): ändrade eller nya dialoger, saknade kundbehov, eller en period som inte är hämtad. För en period som slutar i dag krävs dessutom en hämtning inom en timme. Inkorgar med aktuell analys återanvänds, och inkorgar utan leads räknas inte.
+  - Varje inkorg körs som ett vanligt inkorgsjobb (ADR-051) med samma tabell, heartbeat, dubbelstartsskydd och kostnadsgränser, två åt gången (användarens AI-samtidighet).
+  - När inkorgarna är klara skrivs ortens sammanvägning från de sparade klassificeringarna. Den ersätter knappen "Gör sammanvägning", som togs bort.
+  - Arbetet görs efter svaret med `after()`. Leadanalys och chatten har `maxDuration = 800` (Vercel Pro, Fluid compute). Batchen har en budget på 740 s och startar ingen ny inkorg med mindre än 90 s kvar. Det som inte hinns med visas som återstående, och nästa klick fortsätter.
+  - Förloppet ("3 av 5 inkorgar") läses från databasen (`regionAnalysisStatusAction`), så det överlever omladdning, låst telefon och att sidan lämnas.
+- **Inkorgen är detaljnivån**, oförändrad.
+- **Chatten** gör samma sak från knappen under svaret på en ort. På Alla leads erbjuds ingen analys. Chatten får resonera över det som redan är analyserat, men ska redovisa det per ort och inkorg och inte som en samlad bedömning av hela verksamheten.
+
+**Alternativ som valdes bort:**
+- Batchanalys för Alla leads (strider mot beslutet ovan, och över 800 s skulle kräva en kö).
+- En kö eller Vercel Workflows (onödigt när en ort ryms i en funktions maxtid).
+- En klient som startar inkorgarna en i taget (stannar när sidan lämnas).
+
+**Begränsning:** en ort med många stora inkorgar kan behöva två klick. Ingen inkorg avbryts mitt i, och inget analyseras två gånger.
+
+---
+
 ## Öppna beslut
 
 

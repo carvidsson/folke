@@ -11,6 +11,9 @@ import type { StoredAnalysis, StoredNeeds } from "@/server/data/leads";
  * HubSpot, the dialogues are not AI-analysed, or both – and the steps the user can choose, in the
  * right order. Folke never starts a step itself: the steps are buttons that call the Leadanalys
  * actions, which check access, the selection and the cost limits again. Pure.
+ *
+ * Dialogues are analysed per region (ort) or inbox, never for Alla leads (ADR-053): there the chat
+ * answers from what is already analysed and points to choosing a region instead of offering a step.
  */
 
 export interface GapInput {
@@ -90,6 +93,9 @@ export function findGaps(input: GapInput): Gaps {
   const needsOnly = !!input.needs && input.intents.includes("needs") && input.intents.every((i) => NEEDS_ONLY.includes(i));
   // Nothing fetched yet: whether the dialogues need an analysis is only known afterwards.
   const analyseAfterFetch = notFetched && (!!analyses || !!input.needs) && input.canAnalyse;
+  // Alla leads: no analysis step – the analysis is made per region (ADR-053).
+  const perRegion = !input.scope.regionId && !input.scope.inboxId;
+  const canAnalyse = input.canAnalyse && !perRegion;
 
   const periodText = periodLabel(period.from, period.to);
   const steps: LeadActionReference["steps"] = [];
@@ -101,7 +107,7 @@ export function findGaps(input: GapInput): Gaps {
       inboxIds: fetch,
     });
   }
-  if (input.canAnalyse && !tooLong && (analyse || needsGap || analyseAfterFetch)) {
+  if (canAnalyse && !tooLong && (analyse || needsGap || analyseAfterFetch)) {
     // One job analyses both the dialogues and the customer needs of an inbox (ADR-051, ADR-052).
     const inboxIds = analyse || needsGap ? [...new Set([...(analyse?.inboxIds ?? []), ...(needsGap?.inboxIds ?? [])])].sort() : input.scopeInboxes.map((i) => i.id);
     const what = needsGap && (!analyse || needsOnly)
@@ -113,7 +119,9 @@ export function findGaps(input: GapInput): Gaps {
       action: "analyse",
       label: "Analysera dialogerna",
       detail: what
-        ? `${what} i ${names(inboxIds.map((id) => nameOf.get(id) ?? id))} analyseras med AI, med samma regler och kostnadsgränser som i Leadanalys.`
+        ? input.scope.inboxId
+          ? `${what} i ${names(inboxIds.map((id) => nameOf.get(id) ?? id))} analyseras med AI, med samma regler och kostnadsgränser som i Leadanalys.`
+          : `${what} i ${input.selection} analyseras med AI, inkorg för inkorg, med samma regler och kostnadsgränser som i Leadanalys. Aktuella analyser återanvänds.`
         : `Dialogerna i ${input.selection} analyseras med AI när perioden är hämtad, med samma regler och kostnadsgränser som i Leadanalys.`,
       inboxIds,
     });
@@ -131,6 +139,8 @@ export function findGaps(input: GapInput): Gaps {
       : steps.some((s) => s.action === "sync")
         ? `Perioden ${periodText} är inte hämtad från HubSpot för ${input.selection} ännu, så jag har inget underlag att svara utifrån. Vill du hämta den? Det brukar ta någon minut.${steps.some((s) => s.action === "analyse") ? " Därefter kan dialogerna analyseras, så att jag kan titta på styrkor och utvecklingsområden." : ""}${order}`
         : `Perioden ${periodText} är inte hämtad från HubSpot för ${input.selection}, så det finns inget underlag att svara utifrån. Hämtning från HubSpot är inte möjlig här just nu.`;
+  } else if (perRegion && input.canAnalyse && ((needsOnly && needsGap && needsGap.analysed === 0) || (analysisOnly && analyses && analyse && analyse.analysed === 0))) {
+    answer = `Analysen av kunddialogerna görs per ort, och inga dialoger i ${input.selection} är analyserade för ${periodText} ännu. Välj en ort – till exempel genom att fråga om den – så kan jag analysera kundernas behov, köpsignaler och hur dialogerna hanteras där.`;
   } else if (needsOnly && needsGap && needsGap.analysed === 0) {
     const fetchFirst = steps.some((s) => s.action === "sync") ? " Perioden är inte heller hämtad i sin helhet från HubSpot, så den uppdateras först." : "";
     answer = input.canAnalyse
@@ -152,6 +162,11 @@ export function findGaps(input: GapInput): Gaps {
   if (!answer && steps.some((s) => s.action === "sync")) notes.push(`Perioden är inte hämtad i sin helhet för ${fetch.length === 1 ? nameOf.get(fetch[0]) : `${fetch.length} inkorgar`}; under svaret finns knappen "Uppdatera från HubSpot".`);
   if (!answer && analyse && steps.some((s) => s.action === "analyse")) notes.push(`${analyse.missing} av ${analyse.eligible} dialoger med säljarsvar är inte AI-analyserade; under svaret finns knappen "Analysera dialogerna".`);
   if (!answer && needsGap && steps.some((s) => s.action === "analyse")) notes.push(`Kundbehoven är inte analyserade för ${needsGap.missing} av ${needsGap.candidates} leads med meddelande från kunden; under svaret finns knappen "Analysera dialogerna".`);
+  if (!answer && perRegion && (analyse || needsGap)) {
+    notes.push(
+      `AI-analysen av dialogerna görs per ort, och bara en del av ${input.selection} är analyserad (${analyse ? `${analyse.analysed} av ${analyse.eligible} dialoger med säljarsvar` : `kundbehov för ${needsGap!.analysed} av ${needsGap!.candidates} leads`}). Säg det, beskriv det analyserade underlaget per ort och inkorg i stället för som en samlad bedömning av hela verksamheten, och hänvisa till att välja en ort för en analys av den.`,
+    );
+  }
 
   return { fetch, analyse, needs: needsGap, tooLong, analysisOnly, action, answer, note: notes.length ? notes.join(" ") : null };
 }

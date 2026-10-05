@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ArrowUpRight, ChevronRight, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -35,9 +35,9 @@ export interface LeadListItem extends LeadRow {
 export interface LeadAnalysisProps {
   overview: LeadOverview;
   detail: { sellers: SellerFacts[]; leads: LeadListItem[] } | null;
-  ai: AIStateView;
+  /** Null on Alla leads: the AI analysis is made per region and inbox (ADR-053). */
+  ai: AIStateView | null;
   aiEnabled: boolean;
-  canSummariseAll: boolean;
   linkConfigured: boolean;
   maxSyncDays: number;
   today: string;
@@ -60,7 +60,7 @@ function href(scope: { regionId?: string | null; inboxId?: string | null }, peri
   return `/leads${q ? `?${q}` : ""}`;
 }
 
-export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll, linkConfigured, maxSyncDays, today, askFolke }: LeadAnalysisProps) {
+export function LeadAnalysis({ overview, detail, ai, aiEnabled, linkConfigured, maxSyncDays, today, askFolke }: LeadAnalysisProps) {
   const router = useRouter();
   const { scope, period, metrics, coverage, comparison } = overview;
   const scopeParams = { regionId: scope.type === "region" ? scope.regionId : null, inboxId: scope.inboxId };
@@ -154,7 +154,7 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
           { id: "svarstider", label: "Svarstider" },
           { id: "bilar", label: "Bilar" },
           ...(!observationsFirst ? [{ id: "observationer", label: "Observationer" }] : []),
-          { id: "ai", label: "AI-analys" },
+          ...(ai ? [{ id: "ai", label: "AI-analys" }] : []),
           ...(detail ? [{ id: "saljare", label: "Säljare" }, { id: "alla-leads", label: "Alla leads" }] : []),
         ]}
       />
@@ -236,6 +236,12 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
               </TableBody>
             </Table>
           </Panel>
+          {scope.type === "all" && aiEnabled && (
+            <p className="mt-3 flex items-start gap-2 text-sm text-muted-foreground">
+              <Sparkles className="mt-0.5 size-4 shrink-0" aria-hidden />
+              <span>Analys av kunddialoger görs per ort. Välj en ort för att analysera kundernas behov, köpsignaler och hur dialogerna hanteras.</span>
+            </p>
+          )}
         </Section>
       )}
 
@@ -293,21 +299,15 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
 
       {!observationsFirst && <Observations overview={overview} onEvidence={setEvidence} />}
 
-      <LeadAI
-        scope={actionScope}
-        scopeType={scope.type}
-        analysisVersion={overview.ai.analysisVersion}
-        state={ai}
-        enabled={aiEnabled}
-        canSummariseAll={canSummariseAll}
-        onEvidence={setEvidence}
-      />
+      {ai && scope.type !== "all" && (
+        <LeadAI scope={actionScope} scopeType={scope.type} analysisVersion={overview.ai.analysisVersion} state={ai} enabled={aiEnabled} onEvidence={setEvidence} />
+      )}
 
       {detail && (
         <InboxDetail
           detail={detail}
           linkConfigured={linkConfigured}
-          patterns={ai.current?.summary?.sellerPatterns ?? []}
+          patterns={ai?.current?.summary?.sellerPatterns ?? []}
           onEvidence={setEvidence}
           askFolke={askFolke}
           context={actionScope}

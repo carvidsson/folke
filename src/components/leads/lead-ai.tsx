@@ -26,14 +26,13 @@ import {
   type PurchaseIntent,
   type RunSummaryInfo,
 } from "@/lib/leads/types";
-import {
-  openRunAction,
-  summariseScopeAction,
-} from "@/server/leads/actions";
+import { openRunAction } from "@/server/leads/actions";
 
 import type { EvidenceRequest } from "./evidence-sheet";
 import { SellerCoaching } from "./seller-coaching";
+import { RegionProgress } from "./region-progress";
 import { useInboxAnalysis } from "./use-inbox-analysis";
+import { useRegionAnalysis } from "./use-region-analysis";
 import {
   Bars,
   BehaviourRow,
@@ -58,10 +57,11 @@ export interface AIStateView {
 }
 
 /**
- * The AI layer of the lead analysis (ADR-048). A stored analysis opens
- * directly from Folke. "Uppdatera" only sends changed dialogues to the model
- * (versioned, fingerprinted). Results from other analysis versions open as
- * they were and are never compared with the current method.
+ * The AI layer of the lead analysis (ADR-048) for a region (ort) or an inbox – never for Alla leads
+ * (ADR-053). A stored analysis opens directly from Folke. "Uppdatera" only sends changed dialogues to the
+ * model (versioned, fingerprinted); a region analyses its inboxes that lack a current analysis and then
+ * writes the region's combined analysis. Results from other analysis versions open as they were and are
+ * never compared with the current method.
  */
 export function LeadAI({
   scope,
@@ -69,15 +69,13 @@ export function LeadAI({
   analysisVersion,
   state,
   enabled,
-  canSummariseAll,
   onEvidence,
 }: {
   scope: Record<string, string | null | undefined>;
-  scopeType: "all" | "region" | "inbox";
+  scopeType: "region" | "inbox";
   analysisVersion: string;
   state: AIStateView;
   enabled: boolean;
-  canSummariseAll: boolean;
   onEvidence: (r: EvidenceRequest) => void;
 }) {
   const [shown, setShown] = useState<LeadAIResult | null>(state.current);
@@ -87,6 +85,13 @@ export function LeadAI({
   // True only when the user opened an earlier run; a run made just now is the latest.
   const [viewingEarlier, setViewingEarlier] = useState(false);
   const router = useRouter();
+  // A new latest analysis from the server (after a refresh) replaces the one shown.
+  const [latestId, setLatestId] = useState(state.current?.run.id ?? null);
+  if ((state.current?.run.id ?? null) !== latestId) {
+    setLatestId(state.current?.run.id ?? null);
+    setShown(state.current);
+    setViewingEarlier(false);
+  }
   const historical = Boolean(shown) && viewingEarlier;
   // The inbox analysis runs as a job on the server (ADR-051): its status survives reloads and leaving the page.
   const analysis = useInboxAnalysis(
@@ -100,31 +105,25 @@ export function LeadAI({
       },
     },
   );
+  // A region (ort): its inboxes as jobs, then the region's combined analysis (ADR-053).
+  const region = useRegionAnalysis(
+    scopeType === "region" && scope.regionId && scope.from && scope.to ? { regionId: scope.regionId, preset: "custom", from: scope.from, to: scope.to } : null,
+    { onCompleted: () => router.refresh() },
+  );
   const job = analysis.view;
-  const jobBusy = job.status === "starting" || job.status === "running";
+  const regionView = region.view;
+  const regionBusy = regionView.status === "starting" || regionView.status === "running" || regionView.status === "summarising";
+  const jobBusy = job.status === "starting" || job.status === "running" || regionBusy;
+  const regionLeft = regionView.state ? regionView.state.total - regionView.state.done : 0;
+  const showProgress =
+    scopeType === "region" &&
+    (regionBusy || !!regionView.state?.inboxes.some((i) => i.state === "failed") || (!!regionView.state?.done && regionLeft > 0));
   const outdated = state.eligible - state.upToDate;
   const needsOutdated = state.needs.candidates - state.needs.current;
 
   function run() {
     setError(null);
-    if (scopeType === "inbox") {
-      void analysis.start();
-      return;
-    }
-    start(async () => {
-      const result = await summariseScopeAction(scope).catch(() => null);
-      if (result?.ok) {
-        setShown(result.data);
-        setViewingEarlier(false);
-        // Key figures, insights and the list of earlier runs are rendered on the server.
-        router.refresh();
-      } else
-        setError(
-          result && !result.ok
-            ? result.error
-            : "AI-analysen kunde inte genomföras. Försök igen.",
-        );
-    });
+    void (scopeType === "inbox" ? analysis.start() : region.start());
   }
 
   function open(id: string) {
@@ -140,15 +139,8 @@ export function LeadAI({
     });
   }
 
-  const actionLabel =
-    scopeType === "inbox"
-      ? shown || state.upToDate
-        ? "Uppdatera analys"
-        : "Analysera dialogerna"
-      : shown
-        ? "Gör ny sammanvägning"
-        : "Gör sammanvägning";
-  const allowed = enabled && (scopeType !== "all" || canSummariseAll);
+  const actionLabel = shown || state.upToDate ? "Uppdatera analys" : "Analysera dialogerna";
+  const current = outdated === 0 && needsOutdated === 0 && (scopeType === "inbox" || regionLeft === 0);
 
   return (
     <Section
@@ -158,7 +150,7 @@ export function LeadAI({
       description={
         scopeType === "inbox"
           ? "Dialoger med registrerat säljsvar avidentifieras innan de skickas till OpenAI. AI förstår först vad kunden ville och bedömer sedan om säljaren förde affären framåt. Sparade analyser återanvänds; bara ändrade dialoger skickas igen."
-          : "Sammanvägningen bygger på de AI-analyser som redan finns sparade för inkorgarna i urvalet – inga dialoger skickas på nytt. Analysera inkorgarna först för en fullständig bild."
+          : "Ortens inkorgar analyseras var för sig – dialogerna avidentifieras innan de skickas till OpenAI – och vägs sedan samman för orten. Aktuella analyser återanvänds; bara nya och ändrade dialoger skickas."
       }
     >
       <Panel className="px-6 py-5">
@@ -222,17 +214,17 @@ export function LeadAI({
               <p>
                 {scopeType === "inbox"
                   ? `${number.format(state.eligible)} dialoger med registrerat säljsvar i perioden. Ingen sparad analys för perioden med nuvarande analysmetod.`
-                  : `AI-analys finns sparad för ${ofTotal(state.upToDate, state.eligible)} dialoger med registrerat säljsvar i urvalet. Ingen sammanvägning för perioden ännu.`}
+                  : `${number.format(state.eligible)} dialoger med registrerat säljsvar i ortens inkorgar i perioden. Ingen analys av orten för perioden med nuvarande analysmetod.`}
               </p>
             )}
-            {!historical && scopeType === "inbox" && state.eligible > 0 && (
+            {!historical && state.eligible > 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {outdated === 0
                   ? "Alla dialoger i perioden har en aktuell analys."
                   : `${ofTotal(outdated, state.eligible, { percentage: false })} dialoger har ändrats eller saknar analys sedan dess – de analyseras vid uppdatering.`}
               </p>
             )}
-            {!historical && scopeType === "inbox" && state.needs.candidates > 0 && (
+            {!historical && state.needs.candidates > 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {needsOutdated === 0
                   ? "Kundbehoven är analyserade för alla leads med meddelande från kunden."
@@ -240,12 +232,12 @@ export function LeadAI({
               </p>
             )}
           </div>
-          {allowed && (
+          {enabled && (
             <Button
               onClick={run}
               disabled={pending || jobBusy}
               className="shrink-0"
-              variant={shown && outdated === 0 && needsOutdated === 0 ? "outline" : "default"}
+              variant={shown && current ? "outline" : "default"}
             >
               {shown ? <RefreshCw /> : <Sparkles />}
               {(pending && !openingRun) || jobBusy ? "Analyserar…" : actionLabel}
@@ -264,22 +256,22 @@ export function LeadAI({
             {job.unreachable && " Folke når inte servern just nu och försöker igen."}
           </p>
         )}
+        {showProgress && (
+          <div className="mt-3">
+            <RegionProgress view={regionView} />
+          </div>
+        )}
         {!enabled && (
           <p className="mt-3 text-xs text-muted-foreground">
             AI-analysen är avstängd i den här miljön.
           </p>
         )}
-        {enabled && scopeType === "all" && !canSummariseAll && (
-          <p className="mt-3 text-xs text-muted-foreground">
-            Sammanvägning för alla regioner kräver åtkomst till alla regioner.
-          </p>
-        )}
       </Panel>
 
-      {(error || (scopeType === "inbox" && job.status === "failed" && job.error)) && (
+      {(error || (scopeType === "inbox" && job.status === "failed" && job.error) || (scopeType === "region" && regionView.error)) && (
         <Alert variant="destructive" className="mt-4">
           <AlertTriangle />
-          <AlertDescription>{error ?? job.error}</AlertDescription>
+          <AlertDescription>{error ?? (scopeType === "inbox" ? job.error : regionView.error)}</AlertDescription>
         </Alert>
       )}
 

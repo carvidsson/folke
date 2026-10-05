@@ -652,4 +652,24 @@ describe("missing lead material", () => {
     expect(findGaps({ ...base, period: long, coverage: notFetched, analyses: new Map() })).toMatchObject({ action: null, answer: expect.stringMatching(/för lång/) });
     expect(findGaps({ ...base, intents: ["response_time"], rows: [replied("1")], analyses: null }).action).toBeNull();
   });
+
+  it("Alla leads: no analysis step – the analysis is made per region, and Folke says so (ADR-053)", () => {
+    const all = { ...base, scope: { regionId: null, inboxId: null }, selection: "alla leads" };
+    const none = findGaps({ ...all, rows: [replied("1"), replied("2")], analyses: new Map() });
+    expect(none.action).toBeNull();
+    expect(none.answer).toMatch(/görs per ort.*Välj en ort/);
+    // Partly analysed: Folke answers from what is analysed, per region, and never as one combined reading.
+    const partly = findGaps({ ...all, intents: ["overview"], rows: [replied("1"), replied("2")], analyses: new Map([["1", {} as StoredAnalysis]]) });
+    expect(partly.action).toBeNull();
+    expect(partly.note).toMatch(/görs per ort.*1 av 2 dialoger.*per ort och inkorg/);
+    // A fetch is still offered: it is facts, not AI.
+    const notFetched = { ...fullCoverage, complete: false, completeInboxes: 0, coveredDays: 0, missing: [{ inboxId: "100", name: "Alingsås Audi", coveredDays: 0 }] };
+    expect(findGaps({ ...all, coverage: notFetched, analyses: new Map() }).action?.steps.map((s) => s.action)).toEqual(["sync"]);
+  });
+
+  it("a region: one step analyses the region's inboxes", () => {
+    const g = findGaps({ ...base, scope: { regionId: R_A, inboxId: null }, selection: "Alingsås", rows: [replied("1")], analyses: new Map() });
+    expect(g.action?.steps).toMatchObject([{ action: "analyse", label: "Analysera dialogerna", detail: expect.stringMatching(/i Alingsås analyseras med AI, inkorg för inkorg/) }]);
+    expect(g.action?.scope).toMatchObject({ regionId: R_A, inboxId: null });
+  });
 });

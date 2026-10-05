@@ -4,12 +4,21 @@ import { Check, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import type { LeadActionReference } from "@/lib/domain/types";
-import { inboxAnalysisStatusAction, startInboxAnalysisAction, syncLeadsAction, type InboxAnalysisState } from "@/server/leads/actions";
+import {
+  inboxAnalysisStatusAction,
+  regionAnalysisStatusAction,
+  startInboxAnalysisAction,
+  startRegionAnalysisAction,
+  syncLeadsAction,
+  type InboxAnalysisState,
+  type RegionAnalysisState,
+} from "@/server/leads/actions";
 
 import { useChatActions } from "./chat-actions";
 
-type StepState = { status: "idle" | "running" | "done" | "error"; message: string | null };
+type StepState = { status: "idle" | "running" | "done" | "error"; message: string | null; progress?: { done: number; total: number } };
 
 const POLL_MS = 4000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -22,6 +31,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * The analysis runs as a job on the server (ADR-051): the browser starts it and then only reads its
  * status. Leaving the chat, a reload or a lost connection does not stop it; coming back shows that it is
  * running or done, and a new click never starts a second analysis of the same inbox and period.
+ *
+ * For a region (ort) the step analyses the whole region in one click (ADR-053): the server runs its
+ * inboxes that lack a current analysis and then the region's combined analysis; the step shows how many
+ * inboxes are done. Alla leads gets no analysis step.
  */
 export function LeadActions({ action }: { action: LeadActionReference }) {
   const chat = useChatActions();
@@ -38,6 +51,7 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   }, []);
 
   const scopeOf = (inboxId: string) => ({ inboxId, preset: "custom", from: action.scope.from, to: action.scope.to });
+  const regionScope = action.scope.regionId && !action.scope.inboxId ? { regionId: action.scope.regionId, preset: "custom", from: action.scope.from, to: action.scope.to } : null;
   /** A job that belongs to these steps: started after they were offered. */
   const ours = (s: InboxAnalysisState | null) => !!s?.job && (!action.createdAt || s.job.startedAt >= action.createdAt);
 
@@ -64,6 +78,14 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
   useEffect(() => {
     action.steps.forEach((step, i) => {
       if (step.action !== "analyse") return;
+      if (regionScope) {
+        void (async () => {
+          const r = await regionAnalysisStatusAction(regionScope).catch(() => null);
+          if (!alive.current || !r?.ok) return;
+          if (r.data.running || r.data.summarising) await followRegion(i, r.data, 0);
+        })();
+        return;
+      }
       void (async () => {
         const all = await Promise.all(step.inboxIds.map(async (id) => [id, await status(id)] as const));
         if (!alive.current) return;
@@ -100,7 +122,50 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
     set(i, { status: "done", message: `Perioden är hämtad för ${done} ${done === 1 ? "inkorg" : "inkorgar"}.` });
   }
 
+  /** Shows a region's progress until nothing runs any more – reading the server, never holding a request open. */
+  async function followRegion(i: number, first: RegionAnalysisState | null, startedAt: number) {
+    let s = first;
+    for (;;) {
+      if (s) {
+        const left = s.inboxes.filter((x) => x.state === "pending").length;
+        // Just started: the server may not have registered the first inbox yet.
+        const settling = !!startedAt && Date.now() - startedAt < 20_000 && left > 0;
+        if (!s.running && !s.summarising && !settling) break;
+        set(i, {
+          status: "running",
+          progress: { done: s.done, total: s.total },
+          message: s.summarising ? "Inkorgarna är analyserade. Folke sammanställer nu orten." : "Analysen pågår på servern, två inkorgar i taget. Du kan lämna chatten – den fortsätter.",
+        });
+      } else set(i, { status: "running", message: "Folke når inte servern just nu och försöker igen." });
+      await sleep(POLL_MS);
+      if (!alive.current) return;
+      const r = await regionAnalysisStatusAction(regionScope!).catch(() => null);
+      s = r?.ok ? r.data : null;
+    }
+    const failed = s.inboxes.filter((x) => x.state === "failed");
+    const left = s.total - s.done;
+    if (failed.length && !s.done) return set(i, { status: "error", message: failed[0].error ?? "Analysen kunde inte genomföras. Försök igen." });
+    set(i, {
+      status: left ? "idle" : "done",
+      progress: { done: s.done, total: s.total },
+      message: left
+        ? `${s.done} av ${s.total} inkorgar är analyserade.${failed.length ? ` Det gick inte för ${failed.map((x) => x.name).join(", ")}.` : ""} Klicka igen för att fortsätta – analyserade inkorgar återanvänds.`
+        : `Ortens ${s.total === 1 ? "inkorg är analyserad" : `${s.total} inkorgar är analyserade`}.`,
+    });
+  }
+
+  async function analyseRegion(i: number) {
+    set(i, { status: "running", message: "Startar analysen av orten…" });
+    const startedAt = Date.now();
+    const started = await startRegionAnalysisAction(regionScope!).catch(() => null);
+    if (!alive.current) return;
+    if (started && !started.ok) return set(i, { status: "error", message: started.error });
+    // A lost answer is fine: the analysis may have started – followRegion() reads the server.
+    await followRegion(i, started?.ok ? started.data : null, startedAt);
+  }
+
   async function analyse(i: number) {
+    if (regionScope) return analyseRegion(i);
     const step = action.steps[i];
     let analysed = 0;
     let left = 0;
@@ -149,6 +214,14 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
                   {step.label}
                 </p>
                 <p className="text-xs text-muted-foreground">{step.detail}</p>
+                {state.progress && state.progress.total > 0 && (
+                  <div className="mt-1.5 flex items-center gap-2 text-xs">
+                    <Progress value={(state.progress.done / state.progress.total) * 100} className="h-1.5 max-w-48" aria-label="Analyserade inkorgar" />
+                    <span className="tabular-nums">
+                      {state.progress.done} av {state.progress.total} inkorgar
+                    </span>
+                  </div>
+                )}
                 {state.message && (
                   <p role="status" className={state.status === "error" ? "mt-1 text-xs text-destructive" : "mt-1 text-xs text-muted-foreground"}>
                     {state.message}

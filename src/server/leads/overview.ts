@@ -580,10 +580,12 @@ export async function buildOverview(data: ScopeData, period: Period, today: stri
 
   const model = defaultChatModel();
   const eligible = rows.filter((r) => r.status === "registered_reply" && r.sellerMessages > 0);
-  const [analyses, needs] = await Promise.all([
-    leadStore().loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, model.id),
-    loadNeedsOrNull(rows, model.id),
-  ]);
+  // Alla leads is an operational overview of hard facts (ADR-053): the AI analysis of dialogues is made and
+  // shown per region and inbox, never as one combined reading of the whole business.
+  const factsOnly = data.scope.type === "all";
+  const [analyses, needs] = factsOnly
+    ? [new Map<string, StoredAnalysis>(), null]
+    : await Promise.all([leadStore().loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, model.id), loadNeedsOrNull(rows, model.id)]);
 
   return {
     scope: data.scope,
@@ -602,7 +604,7 @@ export async function buildOverview(data: ScopeData, period: Period, today: stri
     volumes,
     response: responseDistribution(rows, prevCov.complete ? prevRows : null),
     virtual: virtualStats(rows, data.scope.type === "all" ? regionName : null, data.scope.type === "inbox" ? null : data.scopeInboxes),
-    ai: { analysed: eligible.filter((r) => analyses.has(r.threadId)).length, eligible: eligible.length, analysisVersion: ANALYSIS_VERSION },
+    ai: { analysed: eligible.filter((r) => analyses.has(r.threadId)).length, eligible: factsOnly ? 0 : eligible.length, analysisVersion: ANALYSIS_VERSION },
     needs: needs ? needsOverview(rows, needs) : null,
   };
 }

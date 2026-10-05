@@ -4,19 +4,20 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import { daysBetween, resolvePeriod } from "@/lib/leads/periods";
-import { OPPORTUNITY_TYPES, STRENGTH_TYPES, type EvidenceFilter, type EvidenceRow, type LeadActionResult, type LeadAIResult } from "@/lib/leads/types";
+import { OPPORTUNITY_TYPES, STRENGTH_TYPES, type EvidenceFilter, type EvidenceRow, type LeadActionResult, type LeadAIResult, type Period } from "@/lib/leads/types";
 import { leadAnalysisExternalAllowed } from "@/server/ai/guard";
 import { defaultChatModel } from "@/server/ai/models";
 import { logSecurityEvent } from "@/server/audit";
-import { getRun, latestAnalysisJob, leadStore, startAnalysisJob, type AnalysisJob } from "@/server/data/leads";
+import { getRun, latestAnalysisJob, leadStore, listRuns, startAnalysisJob, type AnalysisJob } from "@/server/data/leads";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
 import { requireLeadAccess } from "./access";
 import { stockholmTime } from "./business-hours";
 import { HubSpotError, hubSpotConfigured } from "./hubspot";
 import { NEEDS_FILTER } from "./needs-stats";
-import { evidence, resolveScope, RESPONSE_BUCKETS } from "./overview";
-import { effectiveJob, runInboxAnalysisJob } from "./jobs";
+import { analysisCoverage, type InboxAnalysisCoverage } from "./detail";
+import { evidence, resolveScope, RESPONSE_BUCKETS, type ScopeData } from "./overview";
+import { effectiveJob, runInboxAnalysisJob, runRegionAnalysisBatch } from "./jobs";
 import { ANALYSIS_VERSION } from "./analysis";
 import { renderStoredRun } from "./runs";
 import { MAX_SYNC_DAYS, summariseScope } from "./service";
@@ -178,24 +179,139 @@ export async function inboxAnalysisStatusAction(raw: unknown): Promise<LeadActio
   }
 }
 
-/** AI's combined reading of a region or all regions, from stored classifications only. */
-export async function summariseScopeAction(raw: unknown): Promise<LeadActionResult<LeadAIResult>> {
-  const { session, access } = await requireLeadAccess();
-  if (!leadAnalysisExternalAllowed()) return { ok: false, error: "AI-analysen är inte aktiverad i den här miljön." };
+/** One inbox in a region analysis, as the progress shows it. */
+export interface RegionInboxState {
+  id: string;
+  name: string;
+  state: "done" | "running" | "pending" | "failed";
+  error: string | null;
+}
+
+/** The AI analysis of a region (ort): its relevant inboxes and the region's combined analysis. */
+export interface RegionAnalysisState {
+  inboxes: RegionInboxState[];
+  total: number;
+  done: number;
+  /** An inbox analysis is running (or about to start). */
+  running: boolean;
+  /** The region's combined analysis is being written after the last inbox. */
+  summarising: boolean;
+  /** True when a start joined an analysis that was already running (nothing new was started). */
+  alreadyRunning?: boolean;
+}
+
+/** Inbox jobs that ended this recently count as part of the latest region analysis. */
+const RECENT_MS = 60 * 60_000;
+/** The combined analysis is written right after the last inbox; after this long it is no longer expected. */
+const SUMMARY_WAIT_MS = 3 * 60_000;
+
+async function regionAndPeriod(raw: unknown) {
   const resolved = await scopeAndPeriod(raw);
-  if (!resolved || resolved.data.scope.type === "inbox") return { ok: false, error: "Urvalet hittades inte." };
+  if (!resolved || resolved.data.scope.type !== "region") return null;
+  return resolved;
+}
+
+/** "Utan region" has no combined analysis; a real region does. */
+const summaryRegion = (data: ScopeData) =>
+  data.scope.regionId && data.scope.regionId !== "none" ? { id: data.scope.regionId, inboxIds: data.scopeInboxes.map((i) => i.id) } : null;
+
+interface RegionStateFull extends RegionAnalysisState {
+  coverage: InboxAnalysisCoverage[];
+  summaryOutdated: boolean;
+}
+
+async function regionState(data: ScopeData, period: Period, now = new Date()): Promise<RegionStateFull> {
+  const coverage = (await analysisCoverage(data, period, today(), now)).filter((c) => c.relevant);
+  const region = summaryRegion(data);
+  const [jobs, runs] = await Promise.all([
+    Promise.all(coverage.map((c) => latestAnalysisJob(jobKey(c.id, period)).catch(() => null))),
+    region ? listRuns({ type: "region", regionId: region.id }).catch(() => []) : Promise.resolve([]),
+  ]);
+  const since = now.getTime() - RECENT_MS;
+  const inboxes = coverage.map((c, i): RegionInboxState => {
+    const job = jobs[i] ? effectiveJob(jobs[i], now) : null;
+    const recent = !!job && Date.parse(job.finishedAt ?? job.startedAt) >= since;
+    const state =
+      job?.status === "running" ? "running" : c.current || (recent && job.status === "completed") ? "done" : recent && job.status === "failed" ? "failed" : "pending";
+    return { id: c.id, name: c.name, state, error: state === "failed" ? (job?.error ?? null) : null };
+  });
+  const running = inboxes.some((i) => i.state === "running");
+  const model = defaultChatModel().id;
+  const summaryAt = runs.find((r) => r.from === period.from && r.to === period.to && r.analysisVersion === ANALYSIS_VERSION && r.model === model)?.finishedAt ?? null;
+  const lastFinished = Math.max(0, ...jobs.map((j) => (j?.status === "completed" && j.finishedAt ? Date.parse(j.finishedAt) : 0)));
+  const summaryOutdated = !!region && (!summaryAt || Date.parse(summaryAt) < lastFinished);
+  const summarising =
+    summaryOutdated && !running && !inboxes.some((i) => i.state === "pending") && lastFinished > 0 && now.getTime() - lastFinished < SUMMARY_WAIT_MS;
+  return { inboxes, total: inboxes.length, done: inboxes.filter((i) => i.state === "done").length, running, summarising, coverage, summaryOutdated };
+}
+
+function publicState(state: RegionStateFull): RegionAnalysisState {
+  const { inboxes, total, done, running, summarising } = state;
+  return { inboxes, total, done, running, summarising };
+}
+
+/**
+ * Analyses a region (ort) in one click (ADR-053): every relevant inbox without a current analysis for the
+ * period runs as its own inbox job (ADR-051), two at a time, and the region's combined analysis is then
+ * written from the stored classifications. Runs after the response, so it continues when the browser
+ * goes away; current inbox analyses are reused. Used by the Leadanalys page and the chat alike.
+ */
+export async function startRegionAnalysisAction(raw: unknown): Promise<LeadActionResult<RegionAnalysisState>> {
+  const { session } = await requireLeadAccess();
+  if (!leadAnalysisExternalAllowed()) return { ok: false, error: "AI-analysen är inte aktiverad i den här miljön." };
+  if (!hubSpotConfigured()) return { ok: false, error: hubSpotMessage(new HubSpotError("not_configured")) };
+  const resolved = await regionAndPeriod(raw);
+  if (!resolved) return { ok: false, error: "Orten hittades inte." };
   const { data, period } = resolved;
-  if (data.scope.type === "all" && !access.allRegions) return { ok: false, error: "Sammanvägningen för alla regioner kräver åtkomst till alla regioner." };
-  if (data.scope.regionId === "none") return { ok: false, error: "Välj en region." };
-  const run = await summariseScope({ scopeType: data.scope.type === "all" ? "all" : "region", regionId: data.scope.regionId, inboxIds: data.scopeInboxes.map((i) => i.id), period }, session.user.id);
+  if (daysBetween(period.from, period.to) > MAX_SYNC_DAYS) return { ok: false, error: `Välj en period på högst ${MAX_SYNC_DAYS} dagar.` };
+  let state: RegionStateFull;
+  try {
+    state = await regionState(data, period);
+  } catch {
+    return { ok: false, error: "Analysen kunde inte startas. Försök igen." };
+  }
+  if (state.running || state.summarising) return { ok: true, data: { ...publicState(state), alreadyRunning: true } };
+  const todo = state.coverage.filter((c) => !c.current).map((c) => data.scopeInboxes.find((i) => i.id === c.id)!);
+  const region = summaryRegion(data);
+  if (!todo.length && !(region && state.summaryOutdated)) return { ok: true, data: publicState(state) };
+  if (todo.length) {
+    const supabase = await createSupabaseServerClient();
+    // After the response: within the route's max duration, independent of the browser.
+    after(() => runRegionAnalysisBatch({ inboxes: todo, region, period, userId: session.user.id, supabase, jobKey: (inboxId) => jobKey(inboxId, period) }));
+    await logSecurityEvent("leads.region_analysis_started", {
+      actorId: session.user.id,
+      targetType: "lead_scope",
+      targetId: data.scope.regionId ?? "none",
+      metadata: { from: period.from, to: period.to, inboxes: todo.length, reused: state.total - todo.length },
+    });
+    const queued = new Set(todo.map((i) => i.id));
+    return {
+      ok: true,
+      data: { ...publicState(state), inboxes: state.inboxes.map((i) => (queued.has(i.id) ? { ...i, state: "pending", error: null } : i)), running: true },
+    };
+  }
+  // Every inbox is current; only the combined analysis is missing or older than an inbox analysis.
+  const run = await summariseScope({ scopeType: "region", regionId: region!.id, inboxIds: region!.inboxIds, period }, session.user.id);
   if (!run.ok) return run;
   await logSecurityEvent("leads.ai_analysis_run", {
     actorId: session.user.id,
     targetType: "lead_scope",
-    targetId: data.scope.regionId ?? "all",
+    targetId: region!.id,
     metadata: { from: period.from, to: period.to, dialogues: run.result.run.dialoguesAnalysed, model: run.result.run.model, costUsd: run.result.run.costUsd },
   });
-  return { ok: true, data: run.result };
+  return { ok: true, data: publicState(await regionState(data, period)) };
+}
+
+/** The progress of a region's analysis – read from the database, so it survives reloads. */
+export async function regionAnalysisStatusAction(raw: unknown): Promise<LeadActionResult<RegionAnalysisState>> {
+  await requireLeadAccess();
+  const resolved = await regionAndPeriod(raw);
+  if (!resolved) return { ok: false, error: "Orten hittades inte." };
+  try {
+    return { ok: true, data: publicState(await regionState(resolved.data, resolved.period)) };
+  } catch {
+    return { ok: false, error: "Status kunde inte hämtas." };
+  }
 }
 
 /** Opens a stored analysis – no HubSpot or OpenAI call. RLS decides whether the user may see it. */

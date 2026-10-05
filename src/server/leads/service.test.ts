@@ -474,7 +474,7 @@ describe("combined analysis of a region", () => {
 
   it("refuses when too few dialogues are analysed", async () => {
     await syncInbox(INBOX, PERIOD, store);
-    const run = await summariseScope({ scopeType: "all", regionId: null, inboxIds: [INBOX.id], period: PERIOD }, "user-1", { store });
+    const run = await summariseScope({ scopeType: "region", regionId: "region-1", inboxIds: [INBOX.id], period: PERIOD }, "user-1", { store });
     expect(run).toEqual({ ok: false, error: "Det finns för få AI-analyserade dialoger i urvalet (0 av 1). Analysera inkorgarna först." });
     expect(sent).toHaveLength(0);
   });

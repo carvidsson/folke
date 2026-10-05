@@ -39,6 +39,7 @@ export type SecurityEvent =
   | "ai.instructions_changed"
   | "leads.report_generated"
   | "leads.ai_analysis_run"
+  | "leads.region_analysis_started"
   | "leads.synced"
   | "leads.config_changed"
   | "leads.access_changed";

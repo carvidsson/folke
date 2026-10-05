@@ -10,7 +10,7 @@ import { listMyAssistants } from "@/server/data/assistants";
 export const metadata: Metadata = { title: "Ny chatt" };
 
 // Leadanalys steps started from the chat (ADR-050) run as server actions on this page: the same time budget as on the Leadanalys page.
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 export default async function NewChatPage({ searchParams }: PageProps<"/chat">) {
   const { user } = await getSession();
