@@ -717,6 +717,17 @@ Fel som rättades under valideringen:
 
 **Begränsning:** en ort med många stora inkorgar kan behöva två klick. Ingen inkorg avbryts mitt i, och inget analyseras två gånger.
 
+**Prestanda (2026-10-05), efter profilering och A/B-mätning:**
+- Det mesta av tiden går åt till OpenAI:s svar i klassificeringen. Ungefär 60 % av utdata-tokens är reasoning.
+- Klassificeringen gör nu 3 dialoger per anrop i stället för 6. Mediantiden per anrop sjönk från 55–60 s till 34 s. Klassificeringarna överensstämde med dagens metod inom variationen mellan två körningar (85–87 % mot 84–86 %).
+- Upp till 8 AI-anrop per inkorg går parallellt (tidigare 5), så en vanlig 7-dagarsinkorg ryms i ungefär en våg.
+- Två inkorgar använder cirka 130 000 av modellens 200 000 tokens per minut (och 500 anrop).
+- Ett anrop som OpenAI nekar med 429 försöks en gång till efter 5 s, inom tidsbudgeten.
+- Instruktioner, schema, `reasoning: medium` och analysversionen (lead-ai-3.1) är oförändrade, och sparade analyser gäller fortfarande. Ett kompaktare schema testades men gav ingen tidsvinst, eftersom reasoning ökade.
+- **Sammanvägningarna ligger utanför den kritiska vägen.** Ortsbatchen går vidare till nästa inkorg så fort en inkorg är klassificerad, och den inkorgens jobb skriver sin sammanvägning under tiden. Ortens sammanvägning startar när alla inkorgar är klassificerade, parallellt med de sista inkorgarnas. Jobbet för en enskild inkorg fungerar som förut.
+- **Förloppet:** "x av y inkorgar" räknar inkorgar vars dialoger är klassificerade och sparade. Därefter visas "sammanställer" tills alla sammanvägningar är sparade.
+- **En inkorg räknas som klar bara om inget som skulle analyseras saknas.** Undantag är dialoger som avidentifieringen har stoppat och dialoger över gränsen per körning. Misslyckade dialoger och sådant som återstår visas som återstående, och nästa klick fortsätter.
+
 ---
 
 ## Öppna beslut

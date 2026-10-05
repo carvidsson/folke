@@ -4,7 +4,7 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import { daysBetween, resolvePeriod } from "@/lib/leads/periods";
-import { OPPORTUNITY_TYPES, STRENGTH_TYPES, type EvidenceFilter, type EvidenceRow, type LeadActionResult, type LeadAIResult, type Period } from "@/lib/leads/types";
+import { OPPORTUNITY_TYPES, STRENGTH_TYPES, type EvidenceFilter, type EvidenceRow, type LeadActionResult, type LeadAIResult, type NotAnalysedReason, type Period } from "@/lib/leads/types";
 import { leadAnalysisExternalAllowed } from "@/server/ai/guard";
 import { defaultChatModel } from "@/server/ai/models";
 import { logSecurityEvent } from "@/server/audit";
@@ -192,14 +192,16 @@ export interface RegionAnalysisState {
   inboxes: RegionInboxState[];
   total: number;
   done: number;
-  /** An inbox analysis is running (or about to start). */
+  /** Inboxes are being classified ("done" counts the inboxes whose dialogues are classified and stored). */
   running: boolean;
-  /** The region's combined analysis is being written after the last inbox. */
+  /** Every inbox is classified; the combined analyses of the inboxes and the region are being written. */
   summarising: boolean;
   /** True when a start joined an analysis that was already running (nothing new was started). */
   alreadyRunning?: boolean;
 }
 
+/** What a finished inbox run may not leave behind to count as analysed. */
+const INCOMPLETE: NotAnalysedReason[] = ["failed", "time_limit", "needs_pending"];
 /** Inbox jobs that ended this recently count as part of the latest region analysis. */
 const RECENT_MS = 60 * 60_000;
 /** The combined analysis is written right after the last inbox; after this long it is no longer expected. */
@@ -228,20 +230,35 @@ async function regionState(data: ScopeData, period: Period, now = new Date()): P
     region ? listRuns({ type: "region", regionId: region.id }).catch(() => []) : Promise.resolve([]),
   ]);
   const since = now.getTime() - RECENT_MS;
+  const shown = jobs.map((j) => (j ? effectiveJob(j, now) : null));
+  // A finished job counts only when nothing it should have analysed is missing (only what can never be
+  // analysed – blocked by the redaction check, or beyond the per-run limit – may remain).
+  const finishedRuns = await Promise.all(
+    shown.map((j, i) => (!coverage[i].current && j?.status === "completed" && j.runId && Date.parse(j.finishedAt ?? j.startedAt) >= since ? getRun(j.runId).catch(() => null) : null)),
+  );
+  const complete = (i: number) => {
+    const run = finishedRuns[i];
+    return !!run && !((run.notAnalysed as LeadAIResult["notAnalysed"]) ?? []).some((n) => INCOMPLETE.includes(n.reason) && n.count > 0);
+  };
   const inboxes = coverage.map((c, i): RegionInboxState => {
-    const job = jobs[i] ? effectiveJob(jobs[i], now) : null;
+    const job = shown[i];
     const recent = !!job && Date.parse(job.finishedAt ?? job.startedAt) >= since;
-    const state =
-      job?.status === "running" ? "running" : c.current || (recent && job.status === "completed") ? "done" : recent && job.status === "failed" ? "failed" : "pending";
+    // Classified and stored: done – also while its job still writes the inbox's combined analysis.
+    const state = c.current || complete(i) ? "done" : job?.status === "running" ? "running" : recent && job.status === "failed" ? "failed" : "pending";
     return { id: c.id, name: c.name, state, error: state === "failed" ? (job?.error ?? null) : null };
   });
-  const running = inboxes.some((i) => i.state === "running");
+  const jobsRunning = shown.some((j) => j?.status === "running");
+  const allDone = inboxes.every((i) => i.state === "done");
   const model = defaultChatModel().id;
   const summaryAt = runs.find((r) => r.from === period.from && r.to === period.to && r.analysisVersion === ANALYSIS_VERSION && r.model === model)?.finishedAt ?? null;
-  const lastFinished = Math.max(0, ...jobs.map((j) => (j?.status === "completed" && j.finishedAt ? Date.parse(j.finishedAt) : 0)));
-  const summaryOutdated = !!region && (!summaryAt || Date.parse(summaryAt) < lastFinished);
+  const lastStarted = Math.max(0, ...shown.map((j) => (j ? Date.parse(j.startedAt) : 0)));
+  const lastFinished = Math.max(0, ...shown.map((j) => (j?.status === "completed" && j.finishedAt ? Date.parse(j.finishedAt) : 0)));
+  // The region's combined analysis is written after its inboxes were classified: older than the latest start, it is outdated.
+  const summaryOutdated = !!region && (!summaryAt || Date.parse(summaryAt) < lastStarted);
+  const running = jobsRunning && !allDone;
   const summarising =
-    summaryOutdated && !running && !inboxes.some((i) => i.state === "pending") && lastFinished > 0 && now.getTime() - lastFinished < SUMMARY_WAIT_MS;
+    (jobsRunning && allDone) ||
+    (summaryOutdated && !jobsRunning && !inboxes.some((i) => i.state === "pending") && lastFinished > 0 && now.getTime() - lastFinished < SUMMARY_WAIT_MS);
   return { inboxes, total: inboxes.length, done: inboxes.filter((i) => i.state === "done").length, running, summarising, coverage, summaryOutdated };
 }
 

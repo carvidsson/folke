@@ -7,7 +7,7 @@ import { logSecurityEvent } from "@/server/audit";
 import { leadStore, startAnalysisJob, updateAnalysisJob, type AnalysisJob } from "@/server/data/leads";
 
 import { HubSpotError } from "./hubspot";
-import { analyseInbox, summariseScope } from "./service";
+import { classifyInbox, finishInboxAnalysis, summariseScope } from "./service";
 import { syncInbox } from "./sync";
 
 /**
@@ -42,8 +42,13 @@ export async function runInboxAnalysisJob(input: {
   supabase: SupabaseClient;
   /** Set by a region batch: the job stops in time for the batch's own limit. */
   deadline?: number;
+  /**
+   * Set by a region batch (ADR-053): called when the inbox's dialogues are classified and stored. The
+   * batch then goes on with the next inbox while this job writes the inbox's combined analysis.
+   */
+  onClassified?: () => void;
 }): Promise<void> {
-  const { jobId, inbox, period, userId, supabase, deadline } = input;
+  const { jobId, inbox, period, userId, supabase, deadline, onClassified } = input;
   const store = leadStore(supabase);
   const finish = async (update: Parameters<typeof updateAnalysisJob>[1]) => {
     try {
@@ -62,7 +67,13 @@ export async function runInboxAnalysisJob(input: {
       await finish({ status: "failed", error: "Det gick inte att hämta data från HubSpot. Försök igen." });
       return;
     }
-    const run = await analyseInbox({ inbox, period }, userId, { store, deadline });
+    const classified = await classifyInbox({ inbox, period }, userId, { store, deadline });
+    if (!classified.ok) {
+      await finish({ status: "failed", error: classified.error });
+      return;
+    }
+    onClassified?.();
+    const run = await finishInboxAnalysis(classified.classified);
     if (!run.ok) {
       await finish({ status: "failed", error: run.error });
       return;
@@ -101,12 +112,18 @@ export const BATCH_BUDGET_MS = 740_000;
 const BATCH_PARALLEL = 2;
 /** No new inbox starts with less time than this left; what remains is analysed at the next click. */
 const MIN_TIME_FOR_INBOX_MS = 90_000;
+/** Kept free at the end of the batch for the combined analyses (about 15–25 s). */
+const SUMMARY_TIME_MS = 40_000;
 
 /**
  * Analyses the inboxes of a region that lack a current analysis – each as its own inbox job (ADR-051),
- * two at a time – and then refreshes the region's combined analysis from the stored classifications.
- * Runs after the response, independent of the browser. Every inbox job is registered when it starts
- * (so its heartbeat and limits apply as for a single inbox); an inbox already running is left to it.
+ * two at a time – and writes the region's combined analysis from the stored classifications (ADR-053).
+ * Runs after the response, independent of the browser. Every inbox job is registered when it starts (so
+ * its heartbeat and limits apply as for a single inbox); an inbox already running is left to it.
+ *
+ * The combined analyses are kept off the critical path: the batch moves on to the next inbox as soon as
+ * an inbox's dialogues are classified, while that inbox's job writes its own combined analysis; the
+ * region's starts when every inbox is classified, at the same time as the last inboxes' ones.
  */
 export async function runRegionAnalysisBatch(input: {
   inboxes: { id: string; name: string }[];
@@ -118,6 +135,7 @@ export async function runRegionAnalysisBatch(input: {
 }): Promise<void> {
   const end = Date.now() + BATCH_BUDGET_MS;
   const queue = [...input.inboxes];
+  const jobs: Promise<void>[] = [];
   const worker = async () => {
     for (let inbox = queue.shift(); inbox; inbox = queue.shift()) {
       if (end - Date.now() < MIN_TIME_FOR_INBOX_MS) return;
@@ -129,14 +147,33 @@ export async function runRegionAnalysisBatch(input: {
         continue;
       }
       if (!job.created) continue;
-      await runInboxAnalysisJob({ jobId: job.id, inbox, period: input.period, userId: input.userId, supabase: input.supabase, deadline: end - 15_000 });
+      let classified = () => {};
+      const ready = new Promise<void>((resolve) => (classified = resolve));
+      const running = runInboxAnalysisJob({
+        jobId: job.id,
+        inbox,
+        period: input.period,
+        userId: input.userId,
+        supabase: input.supabase,
+        // Room for the combined analyses after the last inbox.
+        deadline: end - SUMMARY_TIME_MS,
+        onClassified: classified,
+      });
+      jobs.push(running);
+      // On to the next inbox once this one is classified (or its job has ended early).
+      await Promise.race([ready, running]);
     }
   };
   await Promise.all(Array.from({ length: Math.min(BATCH_PARALLEL, queue.length) }, worker));
 
-  // The region's combined analysis (findings and seller patterns) from what is now stored.
-  if (input.region && end - Date.now() > 60_000) {
-    const run = await summariseScope({ scopeType: "region", regionId: input.region.id, inboxIds: input.region.inboxIds, period: input.period }, input.userId, { store: leadStore(input.supabase) }).catch(() => null);
-    if (run && !run.ok) console.info("[leads/batch] no combined analysis", run.error.slice(0, 80));
-  }
+  // Every inbox is classified: the region's combined analysis, while the last inboxes write theirs.
+  const region =
+    input.region && end - Date.now() > SUMMARY_TIME_MS / 2
+      ? summariseScope({ scopeType: "region", regionId: input.region.id, inboxIds: input.region.inboxIds, period: input.period }, input.userId, { store: leadStore(input.supabase) })
+          .then((run) => {
+            if (!run.ok) console.info("[leads/batch] no combined analysis", run.error.slice(0, 80));
+          })
+          .catch(() => console.error("[leads/batch] combined analysis failed"))
+      : Promise.resolve();
+  await Promise.all([...jobs, region]);
 }

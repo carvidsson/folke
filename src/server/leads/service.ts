@@ -18,6 +18,7 @@ import { beginAIRequest, finishAIRequest } from "@/server/ai/limits";
 import { defaultChatModel } from "@/server/ai/models";
 import { chatCostUsd } from "@/server/ai/pricing";
 import type { UsageReport } from "@/server/ai/types";
+import { mapOpenAIError } from "@/server/ai/providers/openai";
 import { recordChatUsage } from "@/server/ai/usage";
 import { leadStore, type LeadStore, type NewAnalysis, type NewNeeds, type StoredAnalysis, type StoredNeeds } from "@/server/data/leads";
 
@@ -61,8 +62,20 @@ export const FACTS_VERSION = 3;
 /** Longest period fetched from HubSpot in one go. The overview reads stored data for longer periods. */
 export const MAX_SYNC_DAYS = 92;
 const FETCH_CONCURRENCY = 4;
-const BATCH_SIZE = 6;
-const AI_CONCURRENCY = 5;
+/**
+ * Dialogues per classification call. Three finish sooner than six (2026-10-05: median 34 s against
+ * 55–60 s per call) with the same classifications within run-to-run variation; the instructions, the
+ * schema and the analysis version are unchanged.
+ */
+export const BATCH_SIZE = 3;
+/**
+ * AI calls at the same time per inbox: a normal 7-day inbox (about six classification and three needs
+ * calls) runs in about one wave. Two inboxes of a region use about 130 000 tokens a minute, well within
+ * the model's 200 000 (and 500 requests).
+ */
+export const AI_CONCURRENCY = 8;
+/** OpenAI asked to slow down (429): one more try after this pause, never past the deadline. */
+const RATE_LIMIT_PAUSE_MS = 5_000;
 /** No new batch starts after this: the server action must finish within the platform limit (300 s). */
 export const AI_TIME_BUDGET_MS = 200_000;
 export const MAX_AI_DIALOGUES = 150;
@@ -233,9 +246,24 @@ function usageRecorder(userId: string) {
   };
 }
 
+/** A call that OpenAI refused with a rate limit is tried once more after a short pause (within the deadline). */
+export async function withRateLimitRetry<T>(call: () => Promise<T>, deadline: number, pauseMs = RATE_LIMIT_PAUSE_MS): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (mapOpenAIError(error).code !== "rate_limited" || Date.now() + pauseMs > deadline) throw error;
+    console.warn("[leads] AI rate limited, retrying once");
+    await new Promise((resolve) => setTimeout(resolve, pauseMs));
+    return call();
+  }
+}
+
 function periodBounds(period: { from: string; to: string }) {
   return { start: startOfStockholmDate(period.from), end: startOfStockholmDate(addDays(period.to, 1)) };
 }
+
+type InboxInput = { inbox: { id: string; name: string }; period: { from: string; to: string } };
+type InboxOptions = { store?: LeadStore; now?: Date; /** A batch (several inboxes) can end the analysis earlier. */ deadline?: number };
 
 /**
  * Analyses one inbox's dialogues with a registered seller reply in the
@@ -244,11 +272,37 @@ function periodBounds(period: { from: string; to: string }) {
  * its follow-up step has changed. Only changed or new dialogues are read
  * from HubSpot, redacted and sent to the model. The caller syncs first.
  */
-export async function analyseInbox(
-  input: { inbox: { id: string; name: string }; period: { from: string; to: string } },
+export async function analyseInbox(input: InboxInput, userId: string, options: InboxOptions = {}): Promise<AIRunResult> {
+  const classified = await classifyInbox(input, userId, options);
+  return classified.ok ? finishInboxAnalysis(classified.classified) : classified;
+}
+
+/** An inbox whose dialogues are classified and stored, before its combined analysis and run are written. */
+export interface ClassifiedInbox {
+  input: InboxInput;
+  store: LeadStore;
+  startedAt: string;
+  rows: number;
+  eligible: number;
+  dialogues: DialogueClassification[];
+  analysedNew: number;
+  reused: number;
+  notAnalysed: { reason: NotAnalysedReason; count: number }[];
+  counts: AICounts;
+  usage: ReturnType<typeof usageRecorder>;
+  budgetMessage: string | null;
+}
+
+/**
+ * The first part of an inbox analysis: classify and store the dialogues and the customer needs. A region
+ * analysis (ADR-053) classifies all its inboxes first and writes their combined analyses afterwards, at
+ * the same time as the region's; a single inbox does both at once (`analyseInbox`).
+ */
+export async function classifyInbox(
+  input: InboxInput,
   userId: string,
-  { store = leadStore(), now = new Date(), deadline: until }: { store?: LeadStore; now?: Date; /** A batch (several inboxes) can end the analysis earlier. */ deadline?: number } = {},
-): Promise<AIRunResult> {
+  { store = leadStore(), now = new Date(), deadline: until }: InboxOptions = {},
+): Promise<{ ok: true; classified: ClassifiedInbox } | { ok: false; error: string }> {
   const model = defaultChatModel();
   const startedAt = new Date().toISOString();
   const { start, end } = periodBounds(input.period);
@@ -395,10 +449,10 @@ export async function analyseInbox(
       }
       if (kind === "needs") {
         try {
-          const result = await classifyNeedsBatch(batch.map((b) => b.prepared), (u) => usage.onUsage(u));
+          const result = await withRateLimitRetry(() => classifyNeedsBatch(batch.map((b) => b.prepared), (u) => usage.onUsage(u)), deadline);
           const missing = batch.filter((b) => !result.has(b.prepared.key));
           if (missing.length && Date.now() < deadline) {
-            const retry = await classifyNeedsBatch(missing.map((b) => b.prepared), (u) => usage.onUsage(u));
+            const retry = await withRateLimitRetry(() => classifyNeedsBatch(missing.map((b) => b.prepared), (u) => usage.onUsage(u)), deadline);
             for (const [key, value] of retry) result.set(key, value);
           }
           for (const { lead, prepared: p } of batch) {
@@ -418,12 +472,12 @@ export async function analyseInbox(
         return;
       }
       try {
-        const result = await classifyBatch(batch.map((b) => b.prepared), (u) => usage.onUsage(u));
+        const result = await withRateLimitRetry(() => classifyBatch(batch.map((b) => b.prepared), (u) => usage.onUsage(u)), deadline);
         // The model occasionally leaves out dialogues in a batch: one more call for just those.
         const missing = batch.filter((b) => !result.has(b.prepared.key));
         if (missing.length && Date.now() < deadline) {
           console.warn("[leads] AI batch incomplete, retrying", missing.length);
-          const retry = await classifyBatch(missing.map((b) => b.prepared), (u) => usage.onUsage(u));
+          const retry = await withRateLimitRetry(() => classifyBatch(missing.map((b) => b.prepared), (u) => usage.onUsage(u)), deadline);
           for (const [key, value] of retry) result.set(key, value);
         }
         for (const { lead, prepared: p } of batch) {
@@ -474,70 +528,95 @@ export async function analyseInbox(
       },
     };
 
-    let summary: AISummary | null = null;
-    if (!budgetMessage) {
-      const slot = await beginAIRequest(null, "chat");
-      if (slot.ok) {
-        try {
-          summary = await combinedSummary(dialogues, (u) => usage.onUsage(u));
-          await finishAIRequest(slot.requestId, "completed");
-        } catch (error) {
-          console.error("[leads] AI summary failed", error instanceof AIProviderError ? error.code : "unknown");
-          await finishAIRequest(slot.requestId, "failed");
-        }
-      }
-    }
-
     status = "completed";
-    if (budgetMessage && dialogues.length === 0) return { ok: false, error: budgetMessage };
-    const notAnalysedList = [...notAnalysed].map(([reason, count]) => ({ reason, count }));
-    const runId = await store
-      .saveRun({
-        scopeType: "inbox",
-        inboxId: input.inbox.id,
-        regionId: null,
-        from: input.period.from,
-        to: input.period.to,
-        analysisVersion: ANALYSIS_VERSION,
-        model: model.id,
-        factsVersion: FACTS_VERSION,
-        startedAt,
-        leads: rows.length,
-        dialoguesAnalysed: dialogues.length,
-        analysedNew: fresh.length,
-        reused,
-        notAnalysed: notAnalysedList,
-        costUsd: usage.cost,
-        facts: { leads: rows.length, eligible: eligible.length },
-        counts,
-        summary,
-      })
-      .catch(() => null);
-    const names2 = await store.sellerNames([...new Set(dialogues.flatMap((d) => (d.sellerId ? [d.sellerId] : [])))]);
     return {
       ok: true,
-      result: {
-        run: {
-          id: runId ?? "",
-          finishedAt: new Date().toISOString(),
-          from: input.period.from,
-          to: input.period.to,
-          dialoguesAnalysed: dialogues.length,
-          analysedNew: fresh.length,
-          reused,
-          analysisVersion: ANALYSIS_VERSION,
-          model: model.id,
-          costUsd: usage.cost,
-        },
+      classified: {
+        input,
+        store,
+        startedAt,
+        rows: rows.length,
+        eligible: eligible.length,
+        dialogues,
+        analysedNew: fresh.length,
+        reused,
+        notAnalysed: [...notAnalysed].map(([reason, count]) => ({ reason, count })),
         counts,
-        summary: summary ? renderSummary(summary, names2) : null,
-        legacySummary: null,
-        notAnalysed: notAnalysedList,
+        usage,
+        budgetMessage,
       },
     };
   } finally {
     await finishAIRequest(begin.requestId, status);
   }
+}
+
+/**
+ * The second part of an inbox analysis: the inbox's combined analysis (one call, from the classifications
+ * just made) and the stored run. `summary: false` stores the run without a combined analysis (no time left).
+ */
+export async function finishInboxAnalysis(c: ClassifiedInbox, { summary: wanted = true }: { summary?: boolean } = {}): Promise<AIRunResult> {
+  const { input, store, dialogues, usage, counts } = c;
+  const model = defaultChatModel();
+  let summary: AISummary | null = null;
+  if (!c.budgetMessage && wanted) {
+    const slot = await beginAIRequest(null, "chat");
+    if (slot.ok) {
+      try {
+        summary = await combinedSummary(dialogues, (u) => usage.onUsage(u));
+        await finishAIRequest(slot.requestId, "completed");
+      } catch (error) {
+        console.error("[leads] AI summary failed", error instanceof AIProviderError ? error.code : "unknown");
+        await finishAIRequest(slot.requestId, "failed");
+      }
+    }
+  }
+
+  if (c.budgetMessage && dialogues.length === 0) return { ok: false, error: c.budgetMessage };
+  const runId = await store
+    .saveRun({
+      scopeType: "inbox",
+      inboxId: input.inbox.id,
+      regionId: null,
+      from: input.period.from,
+      to: input.period.to,
+      analysisVersion: ANALYSIS_VERSION,
+      model: model.id,
+      factsVersion: FACTS_VERSION,
+      startedAt: c.startedAt,
+      leads: c.rows,
+      dialoguesAnalysed: dialogues.length,
+      analysedNew: c.analysedNew,
+      reused: c.reused,
+      notAnalysed: c.notAnalysed,
+      costUsd: usage.cost,
+      facts: { leads: c.rows, eligible: c.eligible },
+      counts,
+      summary,
+    })
+    .catch(() => null);
+  const names = await store.sellerNames([...new Set(dialogues.flatMap((d) => (d.sellerId ? [d.sellerId] : [])))]);
+  return {
+    ok: true,
+    result: {
+      run: {
+        id: runId ?? "",
+        finishedAt: new Date().toISOString(),
+        from: input.period.from,
+        to: input.period.to,
+        dialoguesAnalysed: dialogues.length,
+        analysedNew: c.analysedNew,
+        reused: c.reused,
+        analysisVersion: ANALYSIS_VERSION,
+        model: model.id,
+        costUsd: usage.cost,
+      },
+      counts,
+      summary: summary ? renderSummary(summary, names) : null,
+      legacySummary: null,
+      notAnalysed: c.notAnalysed,
+    },
+  };
 }
 
 /**

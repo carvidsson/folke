@@ -6,7 +6,9 @@ import { resetServerEnvForTests } from "@/server/env";
 import { ANALYSIS_VERSION } from "./analysis";
 import { LISTING_TEXT, MemoryLeadStore, SELLER_A, SYNTHETIC_CUSTOMER } from "./fixtures.test-helpers";
 import { setHubSpotFetchForTests } from "./hubspot";
-import { analyseInbox, clearLeadCachesForTests, summariseScope } from "./service";
+import { AIProviderError } from "@/server/ai/errors";
+
+import { analyseInbox, BATCH_SIZE, clearLeadCachesForTests, summariseScope, withRateLimitRetry } from "./service";
 import { syncInbox } from "./sync";
 
 vi.mock("@/server/ai/limits", () => ({
@@ -361,6 +363,43 @@ describe("AI analysis of an inbox", () => {
     expect(sent.filter((r) => r.text.format.name === "lead_dialogues")).toHaveLength(2);
     expect(console.warn).toHaveBeenCalledWith("[leads] AI batch incomplete, retrying", 1);
   });
+
+  it("tries a call once more after a short pause when OpenAI asks to slow down – never for other errors or past the deadline", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const limited = vi.fn().mockRejectedValueOnce(new AIProviderError("rate_limited")).mockResolvedValueOnce("ok");
+    await expect(withRateLimitRetry(limited, Date.now() + 60_000, 1)).resolves.toBe("ok");
+    expect(limited).toHaveBeenCalledTimes(2);
+    const other = vi.fn().mockRejectedValue(new AIProviderError("bad_request"));
+    await expect(withRateLimitRetry(other, Date.now() + 60_000, 1)).rejects.toThrow();
+    expect(other).toHaveBeenCalledTimes(1);
+    const late = vi.fn().mockRejectedValue(new AIProviderError("rate_limited"));
+    await expect(withRateLimitRetry(late, Date.now() + 10, 1000)).rejects.toThrow();
+    expect(late).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies three dialogues per call (2026-10-05)", () => {
+    expect(BATCH_SIZE).toBe(3);
+  });
+
+  it("a classification call refused with a rate limit is tried again, and the dialogue is analysed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const create = vi.fn();
+    fakeOpenAI();
+    const real = (await import("@/server/ai/providers/openai")).openAIClient();
+    let refused = false;
+    create.mockImplementation(async (body: Request) => {
+      if (body.text.format.name === "lead_dialogues" && !refused) {
+        refused = true;
+        throw new AIProviderError("rate_limited");
+      }
+      return real.responses.create(body as never);
+    });
+    setOpenAIClientForTests({ responses: { create } } as unknown as Parameters<typeof setOpenAIClientForTests>[0]);
+    const run = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(refused).toBe(true);
+    expect(run.ok && run.result.run).toMatchObject({ dialoguesAnalysed: 1, analysedNew: 1 });
+    expect(run.ok && run.result.notAnalysed.some((n) => n.reason === "failed")).toBe(false);
+  }, 20_000);
 
   it("continues when a batch fails and stops at the budget", async () => {
     setOpenAIClientForTests({ responses: { create: vi.fn(async () => ({ status: "completed", output_text: "{not json" })) } } as unknown as Parameters<typeof setOpenAIClientForTests>[0]);

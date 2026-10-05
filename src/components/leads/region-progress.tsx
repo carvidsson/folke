@@ -32,7 +32,7 @@ export function RegionProgress({ view }: { view: RegionAnalysisView }) {
       {busy && (
         <p className="text-muted-foreground">
           {view.status === "summarising"
-            ? "Inkorgarna är analyserade. Folke sammanställer nu orten. "
+            ? "Dialogerna i alla inkorgar är analyserade. Folke sammanställer nu inkorgarna och orten – strax klart. "
             : view.alreadyRunning
               ? "En analys av orten för perioden pågår redan – Folke startar ingen ny, utan visar den här när den är klar. "
               : "Analysen pågår på servern, två inkorgar i taget. "}

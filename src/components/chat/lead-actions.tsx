@@ -134,7 +134,7 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
         set(i, {
           status: "running",
           progress: { done: s.done, total: s.total },
-          message: s.summarising ? "Inkorgarna är analyserade. Folke sammanställer nu orten." : "Analysen pågår på servern, två inkorgar i taget. Du kan lämna chatten – den fortsätter.",
+          message: s.summarising ? "Dialogerna i alla inkorgar är analyserade. Folke sammanställer nu inkorgarna och orten – strax klart." : "Analysen pågår på servern, två inkorgar i taget. Du kan lämna chatten – den fortsätter.",
         });
       } else set(i, { status: "running", message: "Folke når inte servern just nu och försöker igen." });
       await sleep(POLL_MS);
