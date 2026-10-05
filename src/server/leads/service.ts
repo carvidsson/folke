@@ -19,7 +19,7 @@ import { defaultChatModel } from "@/server/ai/models";
 import { chatCostUsd } from "@/server/ai/pricing";
 import type { UsageReport } from "@/server/ai/types";
 import { recordChatUsage } from "@/server/ai/usage";
-import { leadStore, type LeadStore, type NewAnalysis, type StoredAnalysis } from "@/server/data/leads";
+import { leadStore, type LeadStore, type NewAnalysis, type NewNeeds, type StoredAnalysis, type StoredNeeds } from "@/server/data/leads";
 
 import {
   ANALYSIS_VERSION,
@@ -42,6 +42,7 @@ import { TtlCache } from "./cache";
 import { getAgentName, listChannelAccountNames, listInboxes, type HubSpotMessage } from "./hubspot";
 import type { NormalizedLead } from "./normalize";
 import { maskRareCapitalised, pseudonymise } from "./redact";
+import { classifyNeedsBatch, emptyNeeds, NEEDS_BATCH_SIZE, NEEDS_VERSION, needsFingerprint, needsNoAI, withFormLabels } from "./needs";
 import { readThread, threadFromRow } from "./sync";
 
 /**
@@ -65,6 +66,8 @@ const AI_CONCURRENCY = 5;
 /** No new batch starts after this: the server action must finish within the platform limit (300 s). */
 export const AI_TIME_BUDGET_MS = 200_000;
 export const MAX_AI_DIALOGUES = 150;
+/** New needs analyses (lead-needs-1) per run, newest first; the next run continues with the rest. */
+export const MAX_NEEDS_DIALOGUES = 200;
 /** The combined analysis of a region or all regions uses at most this many stored classifications. */
 export const MAX_SUMMARY_DIALOGUES = 250;
 
@@ -284,14 +287,47 @@ export async function analyseInbox(
       } else toRead.push(row);
     }
 
-    // Read the changed dialogues from HubSpot (cached for 30 minutes).
+    // lead-needs-1 (ADR-052): what the customer asks for, for every lead in the period (with or without a
+    // seller reply). A stored result is reused while the thread's latest message is unchanged. Newest first,
+    // at most MAX_NEEDS_DIALOGUES new ones per run; the next run continues with the rest.
+    const needsCandidates = rows.filter((r) => r.customerMessages > 0);
+    let storedNeeds: Map<string, StoredNeeds> | null;
+    try {
+      storedNeeds = await store.loadNeeds(needsCandidates.map((r) => r.threadId), NEEDS_VERSION, model.id);
+    } catch {
+      // Without knowing what is stored, analysing again could double the cost: skip the needs this time.
+      console.error("[leads] stored needs could not be read");
+      storedNeeds = null;
+    }
+    const needsCurrent = (r: LeadRow) => storedNeeds?.get(r.threadId)?.sourceLatestMessageAt === r.latestMessageAt;
+    const needsTodo = storedNeeds ? needsCandidates.filter((r) => !needsCurrent(r)).reverse() : [];
+    const needsSelected = needsTodo.slice(0, MAX_NEEDS_DIALOGUES);
+    let needsPending = needsTodo.length - needsSelected.length + (storedNeeds ? 0 : needsCandidates.length);
+    const wantClassify = new Set(toRead.map((r) => r.threadId));
+    const wantNeeds = new Set(needsSelected.map((r) => r.threadId));
+
+    // Read the changed dialogues from HubSpot once (cached for 30 minutes), for either analysis.
     const deadline = Date.now() + AI_TIME_BUDGET_MS;
-    const forms = toRead.length ? await formNames() : new Map<string, string>();
+    const toFetch = [...new Map([...toRead, ...needsSelected].map((r) => [r.threadId, r])).values()];
+    const forms = toFetch.length ? await formNames() : new Map<string, string>();
     const leads = new Map<string, NormalizedLead>();
+    const needsLeads = new Map<string, NormalizedLead>();
     const touched: NewAnalysis[] = [];
-    await pool(toRead, FETCH_CONCURRENCY, async (row) => {
+    const needsTouched: NewNeeds[] = [];
+    await pool(toFetch, FETCH_CONCURRENCY, async (row) => {
       const lead = await readThread(threadFromRow(row), input.inbox.id, forms);
-      if (!lead || lead === "failed") return skip("failed");
+      if (!lead || lead === "failed") {
+        if (wantClassify.has(row.threadId)) skip("failed");
+        if (wantNeeds.has(row.threadId)) needsPending++;
+        return;
+      }
+      if (wantNeeds.has(row.threadId)) {
+        const previous = storedNeeds?.get(row.threadId);
+        const fingerprint = needsFingerprint(lead);
+        if (previous && previous.fingerprint === fingerprint) needsTouched.push({ threadId: row.threadId, fingerprint, sourceLatestMessageAt: row.latestMessageAt, needs: previous.needs });
+        else needsLeads.set(row.threadId, lead);
+      }
+      if (!wantClassify.has(row.threadId)) return;
       const previous = stored.get(row.threadId);
       const fingerprint = sourceFingerprint(lead, now);
       // Same content and step after all (e.g. only an assignment changed): keep the result, refresh its basis.
@@ -306,8 +342,10 @@ export async function analyseInbox(
 
     const names = await store.sellerNames([...new Set(rows.flatMap((r) => [r.ownerId, r.responderId].filter((x): x is string => Boolean(x))))]);
     const pending = [...leads.values()];
-    const pseudonyms = pseudonymise([...pending.flatMap((l) => l.dialogue.flatMap((m) => (m.sellerId ? [m.sellerId] : []))), ...names.keys()]);
-    const allCustomerNames = [...new Set(pending.flatMap((l) => customerIdentifiers(l).filter((v) => !/[@\d]/.test(v))))];
+    const pendingNeeds = [...needsLeads.values()];
+    const everyone = [...pending, ...pendingNeeds];
+    const pseudonyms = pseudonymise([...everyone.flatMap((l) => l.dialogue.flatMap((m) => (m.sellerId ? [m.sellerId] : []))), ...names.keys()]);
+    const allCustomerNames = [...new Set(everyone.flatMap((l) => customerIdentifiers(l).filter((v) => !/[@\d]/.test(v))))];
     const prepared: { lead: NormalizedLead; prepared: PreparedDialogue }[] = [];
     for (const [i, lead] of pending.entries()) {
       const p = prepareDialogue(`D${i + 1}`, lead, pseudonyms, names, allCustomerNames, now);
@@ -318,18 +356,66 @@ export async function analyseInbox(
     const masked = maskRareCapitalised(prepared.map((p) => p.prepared.text));
     prepared.forEach((p, i) => (p.prepared.text = masked[i]));
 
-    const batches = [];
-    for (let i = 0; i < prepared.length; i += BATCH_SIZE) batches.push(prepared.slice(i, i + BATCH_SIZE));
+    // The needs pass: the same redaction, with numbered messages. A form with fields only needs no AI.
+    const freshNeeds: NewNeeds[] = [];
+    const preparedNeeds: { lead: NormalizedLead; prepared: PreparedDialogue }[] = [];
+    for (const [i, lead] of pendingNeeds.entries()) {
+      const fingerprint = needsFingerprint(lead);
+      if (needsNoAI(lead)) {
+        freshNeeds.push({ threadId: lead.row.threadId, fingerprint, sourceLatestMessageAt: lead.row.latestMessageAt, needs: { ...withFormLabels(emptyNeeds(lead), lead), ai: false } });
+        continue;
+      }
+      const p = prepareDialogue(`B${i + 1}`, lead, pseudonyms, names, allCustomerNames, now, { numbered: true });
+      if ("blocked" in p) needsPending++;
+      else preparedNeeds.push({ lead, prepared: p });
+    }
+    const maskedNeeds = maskRareCapitalised(preparedNeeds.map((p) => p.prepared.text));
+    preparedNeeds.forEach((p, i) => (p.prepared.text = maskedNeeds[i]));
+
+    // One queue for both analyses, alternating, so that neither waits for the other within the time budget.
+    type Task = { kind: "classify" | "needs"; batch: { lead: NormalizedLead; prepared: PreparedDialogue }[] };
+    const classifyTasks: Task[] = [];
+    for (let i = 0; i < prepared.length; i += BATCH_SIZE) classifyTasks.push({ kind: "classify", batch: prepared.slice(i, i + BATCH_SIZE) });
+    const needsTasks: Task[] = [];
+    for (let i = 0; i < preparedNeeds.length; i += NEEDS_BATCH_SIZE) needsTasks.push({ kind: "needs", batch: preparedNeeds.slice(i, i + NEEDS_BATCH_SIZE) });
+    const tasks: Task[] = [];
+    for (let i = 0; i < Math.max(classifyTasks.length, needsTasks.length); i++) tasks.push(...[classifyTasks[i], needsTasks[i]].filter((t): t is Task => Boolean(t)));
+
     let budgetMessage: string | null = null;
     const fresh: NewAnalysis[] = [];
-    await pool(batches, AI_CONCURRENCY, async (batch) => {
-      if (budgetMessage) return skip("failed", batch.length);
+    await pool(tasks, AI_CONCURRENCY, async ({ kind, batch }) => {
+      const missed = (n: number, reason: "failed" | "time_limit") => (kind === "needs" ? (needsPending += n) : skip(reason, n));
+      if (budgetMessage) return missed(batch.length, "failed");
       // Stored results make the next run continue where this one stopped.
-      if (Date.now() > deadline) return skip("time_limit", batch.length);
+      if (Date.now() > deadline) return missed(batch.length, "time_limit");
       const slot = await beginAIRequest(null, "chat");
       if (!slot.ok) {
         budgetMessage = slot.message;
-        return skip("failed", batch.length);
+        return missed(batch.length, "failed");
+      }
+      if (kind === "needs") {
+        try {
+          const result = await classifyNeedsBatch(batch.map((b) => b.prepared), (u) => usage.onUsage(u));
+          const missing = batch.filter((b) => !result.has(b.prepared.key));
+          if (missing.length && Date.now() < deadline) {
+            const retry = await classifyNeedsBatch(missing.map((b) => b.prepared), (u) => usage.onUsage(u));
+            for (const [key, value] of retry) result.set(key, value);
+          }
+          for (const { lead, prepared: p } of batch) {
+            const value = result.get(p.key);
+            if (!value) {
+              needsPending++;
+              continue;
+            }
+            freshNeeds.push({ threadId: lead.row.threadId, fingerprint: needsFingerprint(lead), sourceLatestMessageAt: lead.row.latestMessageAt, needs: { ...withFormLabels(value, lead), ai: true } });
+          }
+          await finishAIRequest(slot.requestId, "completed");
+        } catch (error) {
+          console.error("[leads] AI needs batch failed", error instanceof AIProviderError ? error.code : "unknown");
+          needsPending += batch.length;
+          await finishAIRequest(slot.requestId, "failed");
+        }
+        return;
       }
       try {
         const result = await classifyBatch(batch.map((b) => b.prepared), (u) => usage.onUsage(u));
@@ -365,11 +451,28 @@ export async function analyseInbox(
     } catch {
       console.error("[leads] analyses could not be saved");
     }
+    let needsSaved = true;
+    try {
+      await store.saveNeeds([...freshNeeds, ...needsTouched], NEEDS_VERSION, model.id);
+    } catch {
+      needsSaved = false;
+      console.error("[leads] needs could not be saved");
+    }
+    if (!needsSaved) needsPending += freshNeeds.length + needsTouched.length;
+    if (needsPending > 0) skip("needs_pending", needsPending);
 
     const dialogues: DialogueClassification[] = selected
       .filter((r) => done.has(r.threadId))
       .map((r) => ({ threadId: r.threadId, sellerId: r.responderId, ...done.get(r.threadId)! }));
-    const counts = aiCounts(dialogues);
+    const counts: AICounts = {
+      ...aiCounts(dialogues),
+      needs: {
+        candidates: needsCandidates.length,
+        analysed: needsCandidates.length - Math.min(needsCandidates.length, needsPending),
+        analysedNew: needsSaved ? freshNeeds.length : 0,
+        pending: needsPending,
+      },
+    };
 
     let summary: AISummary | null = null;
     if (!budgetMessage) {

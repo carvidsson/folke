@@ -437,6 +437,60 @@ describe("lead access per group, user and region", () => {
     });
   });
 
+  const needs = (thread: string, version = "lead-needs-1") =>
+    `insert into public.lead_dialogue_needs (hubspot_thread_id, needs_version, model, source_fingerprint, purpose, evidence, result)
+     values ('${thread}', '${version}', 'gpt-6-luna', '${FP_A}', 'purchase', 'sufficient', '{"needs":[{"code":"trade_in","stance":"expressed","source":"customer_message","message":1,"note":"Vill byta in"}],"signals":[],"requests":[],"timeframe":"none","unavailable":{"situation":"none","carried":"not_applicable","note":""},"sellerTopics":[]}')
+     on conflict (hubspot_thread_id, needs_version, model) do update set source_fingerprint = excluded.source_fingerprint, analysed_at = now()`;
+
+  it("customer needs (ADR-052): readable and writable like the dialogue analyses – own region only, no deletes", async () => {
+    await withSetup(U.seller, async (tx) => {
+      await tx.exec("reset role");
+      await tx.query(needs("701"));
+      await tx.query(needs("702"));
+      await tx.query(needs("703"));
+      await tx.exec("set local role authenticated");
+      expect(await ids(tx, `select hubspot_thread_id as id from public.lead_dialogue_needs where hubspot_thread_id like '70%'`)).toEqual(["701"]);
+      expect((await tx.query(`select 1 from public.lead_dialogue_needs n join public.lead_threads t using (hubspot_thread_id) where t.hubspot_inbox_id = '800002'`)).rows).toHaveLength(0);
+      // The job writes with the user's own session: their region yes, another region or an inactive inbox no.
+      await tx.query(needs("701", "lead-needs-x"));
+      await expectDenied(tx, needs("702", "lead-needs-x"));
+      await expectDenied(tx, needs("703", "lead-needs-x"));
+      await expectDenied(tx, `update public.lead_dialogue_needs set evidence = 'limited' where hubspot_thread_id = '702'`);
+      await expectDenied(tx, `delete from public.lead_dialogue_needs where hubspot_thread_id = '701'`);
+    });
+    for (const user of [U.mechanic, U.loner]) {
+      await withSetup(user, async (tx) => {
+        await tx.exec("reset role");
+        await tx.query(needs("701"));
+        await tx.query(needs("702"));
+        await tx.exec("set local role authenticated");
+        // The mechanic has no lead access; the loner has all regions (active inboxes only).
+        expect(await ids(tx, `select hubspot_thread_id as id from public.lead_dialogue_needs where hubspot_thread_id like '70%'`)).toEqual(user === U.loner ? ["701", "702"] : []);
+        if (user === U.mechanic) await expectDenied(tx, needs("701", "lead-needs-x"));
+      });
+    }
+  });
+
+  it("customer needs reject malformed rows and anonymous access", async () => {
+    await asServiceRollback(db, async (tx) => {
+      await tx.exec("reset role");
+      await setup(tx);
+      for (const bad of [
+        needs("701").replace("'purchase'", "'sales'"),
+        needs("701").replace("'lead-needs-1'", "'Lead Needs!'"),
+        needs("701").replace(`'${FP_A}'`, "'kort'"),
+        needs("701").replace(`'sufficient'`, "'maybe'"),
+      ]) {
+        await tx.exec("savepoint bad");
+        await expect(tx.query(bad)).rejects.toThrow();
+        await tx.exec("rollback to savepoint bad");
+      }
+    });
+    await asAnon(db, async (tx) => {
+      await expect(tx.query(`select 1 from public.lead_dialogue_needs`)).rejects.toThrow();
+    });
+  });
+
   it("the helper function is SECURITY DEFINER with an empty search_path and can only be executed by authenticated and service_role", async () => {
     const { rows } = await db.query<{ definer: boolean; config: string[] | null; volatile: string; acl: string }>(
       `select p.prosecdef as definer, p.proconfig as config, p.provolatile as volatile, p.proacl::text as acl

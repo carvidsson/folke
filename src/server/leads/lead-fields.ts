@@ -93,7 +93,9 @@ export interface ParsedLead {
   facility: string | null;
   contactVia: string | null;
   hasTradeIn: boolean;
-  contact: { name: boolean; email: boolean; phone: boolean };
+  /** The form's company field ("Bolag") is filled in: the customer gave a company (lead-needs-1). */
+  hasCompany: boolean;
+  contact:{ name: boolean; email: boolean; phone: boolean };
   /** Customer free text (contains personal data – redact before any use). */
   message: string | null;
   /** For redaction only. */
@@ -228,6 +230,7 @@ export function parseLeadText(text: string | null | undefined): ParsedLead {
     facility: clean(values.facility),
     contactVia: clean(values.contactVia),
     hasTradeIn: Boolean(tradeIn),
+    hasCompany: Boolean(company),
     contact: { name: names.length > 0, email: Boolean(email), phone: Boolean(phone) },
     message: [cleanText(values.message), cleanText(values.extra)].filter(Boolean).join("\n") || null,
     personal: {

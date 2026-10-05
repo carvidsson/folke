@@ -7,7 +7,7 @@ import { getThreadUrlTemplate, leadStore, listLeadRows, listRuns, sellerNames } 
 
 import { ANALYSIS_VERSION, situationFromRow } from "./analysis";
 import { startOfStockholmDate } from "./business-hours";
-import { isWaiting, threadUrl, type ScopeData } from "./overview";
+import { loadNeedsOrNull, isWaiting, threadUrl, type ScopeData } from "./overview";
 import { renderStoredRun } from "./runs";
 import { aiCounts } from "./service";
 import { sellerFacts } from "./stats";
@@ -41,6 +41,8 @@ export interface AIState {
   upToDate: number;
   /** Counts over the stored classifications in the period (live, deterministic). */
   counts: LeadAIResult["counts"];
+  /** lead-needs-1 (ADR-052): leads with a customer message, and how many have a current needs analysis. */
+  needs: { candidates: number; current: number };
 }
 
 export interface InboxDetail {
@@ -87,7 +89,11 @@ export async function aiState(data: ScopeData, period: Period, now = new Date())
   const model = defaultChatModel();
   const rows = await rowsFor(data, period);
   const eligible = rows.filter((r) => r.status === "registered_reply" && r.sellerMessages > 0);
-  const stored = await leadStore().loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, model.id);
+  const candidates = rows.filter((r) => r.customerMessages > 0);
+  const [stored, storedNeeds] = await Promise.all([
+    leadStore().loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, model.id),
+    loadNeedsOrNull(rows, model.id),
+  ]);
   const valid = eligible.filter((r) => {
     const a = stored.get(r.threadId);
     return a && a.sourceLatestMessageAt === r.latestMessageAt && a.situationState === situationFromRow(r, now);
@@ -115,5 +121,6 @@ export async function aiState(data: ScopeData, period: Period, now = new Date())
     eligible: eligible.length,
     upToDate: valid.length,
     counts: stored.size ? aiCounts(eligible.filter((r) => stored.has(r.threadId)).map((r) => stored.get(r.threadId)!.classification)) : null,
+    needs: { candidates: candidates.length, current: candidates.filter((r) => storedNeeds?.get(r.threadId)?.sourceLatestMessageAt === r.latestMessageAt).length },
   };
 }

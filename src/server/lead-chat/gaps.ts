@@ -4,7 +4,7 @@ import type { LeadActionReference } from "@/lib/domain/types";
 import type { LeadIntent } from "@/lib/leads/chat";
 import { daysBetween, periodLabel } from "@/lib/leads/periods";
 import type { CoverageInfo, LeadRow, Period } from "@/lib/leads/types";
-import type { StoredAnalysis } from "@/server/data/leads";
+import type { StoredAnalysis, StoredNeeds } from "@/server/data/leads";
 
 /**
  * Missing lead material in the chat (ADR-050): why it is missing – the period is not fetched from
@@ -20,6 +20,8 @@ export interface GapInput {
   rows: LeadRow[];
   /** Null when the question does not need the AI classifications. */
   analyses: Map<string, StoredAnalysis> | null;
+  /** lead-needs-1: null when the question does not need the customer needs. */
+  needs?: Map<string, StoredNeeds> | null;
   sellerId: string | null;
   intents: LeadIntent[];
   period: Period;
@@ -39,6 +41,8 @@ export interface Gaps {
   fetch: string[];
   /** Inboxes with dialogues that need an analysis, and how many. */
   analyse: { inboxIds: string[]; missing: number; eligible: number; analysed: number } | null;
+  /** Leads with a customer message that lack the needs analysis (lead-needs-1), and how many. */
+  needs: { inboxIds: string[]; missing: number; candidates: number; analysed: number } | null;
   tooLong: boolean;
   /** The question is only about the AI classifications (patterns, examples, why). */
   analysisOnly: boolean;
@@ -50,6 +54,8 @@ export interface Gaps {
 }
 
 const ANALYSIS_ONLY: LeadIntent[] = ["patterns", "examples", "explain"];
+/** A question about customer needs, possibly narrowed to a source or Virtuell: answered from the needs analysis. */
+const NEEDS_ONLY: LeadIntent[] = ["needs", "examples", "explain", "source", "virtual"];
 
 function names(list: string[]) {
   return list.length <= 2 ? list.join(" och ") : `${list.slice(0, -1).join(", ")} och ${list[list.length - 1]}`;
@@ -73,8 +79,17 @@ export function findGaps(input: GapInput): Gaps {
       analyse = { inboxIds: [...new Set(missingRows.map((r) => r.inboxId))].sort(), missing: missingRows.length, eligible: eligible.length, analysed: eligible.length - missingRows.length };
     }
   }
+  let needsGap: Gaps["needs"] = null;
+  if (input.needs) {
+    const candidates = rows.filter((r) => r.customerMessages > 0 && (!input.sellerId || r.responderId === input.sellerId || r.ownerId === input.sellerId));
+    const missingRows = candidates.filter((r) => !input.needs!.has(r.threadId));
+    if (missingRows.length) {
+      needsGap = { inboxIds: [...new Set(missingRows.map((r) => r.inboxId))].sort(), missing: missingRows.length, candidates: candidates.length, analysed: candidates.length - missingRows.length };
+    }
+  }
+  const needsOnly = !!input.needs && input.intents.includes("needs") && input.intents.every((i) => NEEDS_ONLY.includes(i));
   // Nothing fetched yet: whether the dialogues need an analysis is only known afterwards.
-  const analyseAfterFetch = notFetched && !!analyses && input.canAnalyse;
+  const analyseAfterFetch = notFetched && (!!analyses || !!input.needs) && input.canAnalyse;
 
   const periodText = periodLabel(period.from, period.to);
   const steps: LeadActionReference["steps"] = [];
@@ -86,13 +101,19 @@ export function findGaps(input: GapInput): Gaps {
       inboxIds: fetch,
     });
   }
-  if (input.canAnalyse && !tooLong && (analyse || analyseAfterFetch)) {
-    const inboxIds = analyse ? analyse.inboxIds : input.scopeInboxes.map((i) => i.id);
+  if (input.canAnalyse && !tooLong && (analyse || needsGap || analyseAfterFetch)) {
+    // One job analyses both the dialogues and the customer needs of an inbox (ADR-051, ADR-052).
+    const inboxIds = analyse || needsGap ? [...new Set([...(analyse?.inboxIds ?? []), ...(needsGap?.inboxIds ?? [])])].sort() : input.scopeInboxes.map((i) => i.id);
+    const what = needsGap && (!analyse || needsOnly)
+      ? `Kundbehoven i ${needsGap.missing} ${needsGap.missing === 1 ? "lead" : "leads"}`
+      : analyse
+        ? `${analyse.missing} ${analyse.missing === 1 ? "dialog" : "dialoger"}`
+        : null;
     steps.push({
       action: "analyse",
       label: "Analysera dialogerna",
-      detail: analyse
-        ? `${analyse.missing} ${analyse.missing === 1 ? "dialog" : "dialoger"} i ${names(analyse.inboxIds.map((id) => nameOf.get(id) ?? id))} analyseras med AI, med samma regler och kostnadsgränser som i Leadanalys.`
+      detail: what
+        ? `${what} i ${names(inboxIds.map((id) => nameOf.get(id) ?? id))} analyseras med AI, med samma regler och kostnadsgränser som i Leadanalys.`
         : `Dialogerna i ${input.selection} analyseras med AI när perioden är hämtad, med samma regler och kostnadsgränser som i Leadanalys.`,
       inboxIds,
     });
@@ -110,6 +131,13 @@ export function findGaps(input: GapInput): Gaps {
       : steps.some((s) => s.action === "sync")
         ? `Perioden ${periodText} är inte hämtad från HubSpot för ${input.selection} ännu, så jag har inget underlag att svara utifrån. Vill du hämta den? Det brukar ta någon minut.${steps.some((s) => s.action === "analyse") ? " Därefter kan dialogerna analyseras, så att jag kan titta på styrkor och utvecklingsområden." : ""}${order}`
         : `Perioden ${periodText} är inte hämtad från HubSpot för ${input.selection}, så det finns inget underlag att svara utifrån. Hämtning från HubSpot är inte möjlig här just nu.`;
+  } else if (needsOnly && needsGap && needsGap.analysed === 0) {
+    const fetchFirst = steps.some((s) => s.action === "sync") ? " Perioden är inte heller hämtad i sin helhet från HubSpot, så den uppdateras först." : "";
+    answer = input.canAnalyse
+      ? tooLong
+        ? `Jag har leadstatistiken för ${periodText} i ${input.selection}, men kundbehoven är inte analyserade ännu, och perioden är för lång för en analys (högst ${input.maxDays} dagar). Välj en kortare period, till exempel senaste 30 dagarna.`
+        : `Jag har leadstatistiken för ${periodText} i ${input.selection}, men kundbehoven är inte analyserade ännu (${needsGap.candidates} ${needsGap.candidates === 1 ? "lead" : "leads"} med meddelande från kunden). Vill du analysera dialogerna så att jag kan svara på vad kunderna frågar efter?${fetchFirst}${order}`
+      : `Jag har leadstatistiken för ${periodText} i ${input.selection}, men kundbehoven är inte analyserade, och AI-analysen av dialogerna är inte aktiverad i den här miljön.`;
   } else if (analysisOnly && analyses && analyse && analyse.analysed === 0) {
     const fetchFirst = steps.some((s) => s.action === "sync") ? " Perioden är inte heller hämtad i sin helhet från HubSpot, så den uppdateras först." : "";
     answer = input.canAnalyse
@@ -123,6 +151,7 @@ export function findGaps(input: GapInput): Gaps {
   const notes: string[] = [];
   if (!answer && steps.some((s) => s.action === "sync")) notes.push(`Perioden är inte hämtad i sin helhet för ${fetch.length === 1 ? nameOf.get(fetch[0]) : `${fetch.length} inkorgar`}; under svaret finns knappen "Uppdatera från HubSpot".`);
   if (!answer && analyse && steps.some((s) => s.action === "analyse")) notes.push(`${analyse.missing} av ${analyse.eligible} dialoger med säljarsvar är inte AI-analyserade; under svaret finns knappen "Analysera dialogerna".`);
+  if (!answer && needsGap && steps.some((s) => s.action === "analyse")) notes.push(`Kundbehoven är inte analyserade för ${needsGap.missing} av ${needsGap.candidates} leads med meddelande från kunden; under svaret finns knappen "Analysera dialogerna".`);
 
-  return { fetch, analyse, tooLong, analysisOnly, action, answer, note: notes.length ? notes.join(" ") : null };
+  return { fetch, analyse, needs: needsGap, tooLong, analysisOnly, action, answer, note: notes.length ? notes.join(" ") : null };
 }

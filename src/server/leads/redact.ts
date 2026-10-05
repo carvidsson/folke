@@ -60,6 +60,17 @@ const PHONE = /(?:\+|00)\d{1,3}[\s-]?\(?\d{1,4}\)?(?:[\s-]?\d){5,10}\b|\b0\d{1,3
 const LONG_NUMBER = /\b\d(?:[ -]?\d){7,}\b/g;
 // Engine codes ("TSI 150", "TDI 115") look like plates but are business context.
 const PLATE = /\b(?!TSI|TDI|GTI|GTE|GTD|EVO|KWH|DSG)[A-ZÅÄÖ]{3} ?\d{2}[A-Z0-9]\b/g;
+// Customers also write plates in lower case ("abc12d"; verified 2026-10-04). Without a space in any case;
+// with a space only after "reg.nr" and the like – "kör 150" and "för 205" are ordinary text.
+const PLATE_ANY_CASE = /\b(?!tsi|tdi|gti|gte|gtd|evo|kwh|dsg)[a-zåäö]{3}\d{2}[a-zåäö0-9]\b/gi;
+const PLATE_AFTER_LABEL = /(\breg(?:istrerings)?\.?\s*(?:nr|nummer|nummret)?\.?:?\s*)[a-zåäö]{3} \d{2}[a-zåäö0-9]\b/gi;
+// Vehicle identification numbers (17 characters, letters and digits, no I, O or Q).
+const VIN = /\b(?=[A-HJ-NPR-Z0-9]{0,16}\d)(?=[A-HJ-NPR-Z0-9]{0,16}[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{17}\b/gi;
+// A date of birth on its own (YYMMDD or YYYYMMDD) – the first part of a personnummer. Round prices and
+// mileages ("579900", "100000") are not valid dates and are kept.
+const BIRTH_DATE = /\b(?:19|20)?\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\b/g;
+// Social media handles ("@företaget").
+const HANDLE = /(?<![\p{L}\d._-])@[\p{L}\d._]{2,}/gu;
 const POSTAL = /\b\d{3} ?\d{2}\s+[A-ZÅÄÖ][a-zåäö]+/g;
 const STREET = /\b[A-ZÅÄÖ][a-zåäö]+(?:gatan|vägen|gränd|torget|backen|stigen|allén|platsen|leden)\s+\d+\s?[A-Za-z]?\b/g;
 const GREETING = /\b(Hej|Hejsan|Hallå|Tjena|Hi|Hello|Dear|Bästa|Kära)(\s+)([A-ZÅÄÖ][a-zåäöéü]+(?:\s+[A-ZÅÄÖ][a-zåäöéü]+)?)/g;
@@ -96,9 +107,17 @@ function wordPattern(value: string, flags: string): RegExp {
 }
 
 /** Whole-word, case-insensitive replacement of a literal value. */
+/**
+ * Name parts that are also everyday Swedish words ("per år", "bo i Göteborg", "max 1000 mil"): as part
+ * of a name they are matched only when capitalised (verified 2026-10-04: a seller whose first name is also an everyday word turned
+ * "1500 mil per år" into "1500 mil Säljare 24 år").
+ */
+const WORD_NAME_PARTS = new Set(["per", "bo", "max", "dag", "sten", "tor", "vide", "ek"]);
+
 function replaceLiteral(text: string, value: string, replacement: string): string {
   const v = value.trim();
   if (v.length < 2) return text;
+  if (WORD_NAME_PARTS.has(v.toLowerCase())) return text.replace(wordPattern(v[0].toUpperCase() + v.slice(1).toLowerCase(), "gu"), replacement);
   return text.replace(wordPattern(v, "giu"), replacement);
 }
 
@@ -117,12 +136,44 @@ function stripQuotedHistory(text: string): string {
   return kept.filter((l) => !l.trim().startsWith(">") && !CLIENT_FOOTER.test(l.trim())).join("\n");
 }
 
-/** Replaces up to four lines after a sign-off ("Mvh") – typically name, title, phone, address. */
+/**
+ * A signature on the sign-off line itself ("mvh namn", "Mvh. Förnamn Efternamn, telefon, e-post"; verified
+ * 2026-10-04): the rest of the line is replaced, however long.
+ */
+const SIGN_OFF_INLINE =
+  /^(\s*(?:mvh|m\.v\.h\.?|med vänlig(?:a)? hälsning(?:ar)?|vänlig(?:a)? hälsning(?:ar)?|hälsningar|best regards|kind regards|regards)[,.!:]?)[ \t]+\S.*$/i;
+/** An e-mail address written with spaces ("namn@folke. example"). */
+const EMAIL_SPACED = /[\p{L}\d._%+-]+[ \t]?@[ \t]?[\p{L}\d-]+(?:[ \t]?\.[ \t]?[\p{L}\d-]+)+/gu;
+/** A name glued to the sign-off ("MvhNamn"; verified 2026-10-04). */
+const GLUED_SIGN_OFF = /\b(mvh|Mvh|MVH)(\p{Lu}[\p{L}-]+)/gu;
+/** A name signed with a slash at the end of a line ("… kvar? /Namn"). */
+const SLASH_NAME = /(^|[\s.!?])\/{1,2}[ \t]?\p{Lu}[\p{L}-]+(?:[ \t]\p{Lu}[\p{L}-]+)?[ \t]*$/gmu;
+/** An address label; its value – on the same line or the next – is an address. */
+const ADDRESS_LABEL = /^\s*(?:faktura\s?-?adress|leveransadress|hemadress|postadress|adress|address)\s*[:.]?\s*(.*)$/i;
+
+/**
+ * Replaces up to four lines after a sign-off ("Mvh") – typically name, title, phone, address – and a
+ * name on the sign-off line itself; and the value after an address label.
+ */
 function redactSignatures(text: string): string {
   const lines = text.split("\n");
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
-    out.push(lines[i]);
+    const address = ADDRESS_LABEL.exec(lines[i]);
+    if (address) {
+      if (address[1].trim()) {
+        out.push(lines[i].slice(0, lines[i].length - address[1].length) + "[adress]");
+        continue;
+      }
+      out.push(lines[i]);
+      while (i + 1 < lines.length && !lines[i + 1].trim()) i++;
+      if (i + 1 < lines.length) {
+        i++;
+        out.push("[adress]");
+      }
+      continue;
+    }
+    out.push(lines[i].replace(SIGN_OFF_INLINE, "$1 [namn]"));
     if (SIGN_OFF.test(lines[i].trim())) {
       let skipped = 0;
       while (i + 1 < lines.length && skipped < 4 && lines[i + 1].trim().length <= 80) {
@@ -137,10 +188,12 @@ function redactSignatures(text: string): string {
 
 export function redactText(input: string, known: KnownPersonalData): string {
   let text = stripQuotedHistory(input.replace(/\r\n/g, "\n"));
-  text = redactSignatures(text);
-  text = text.replace(EMAIL, "[e-post]").replace(URL_PATTERN, "[länk]");
-  text = text.replace(PERSONNUMMER, "[personnummer]").replace(PHONE, "[telefon]").replace(LONG_NUMBER, "[nummer]");
-  text = text.replace(PLATE, "[regnr]").replace(STREET, "[adress]").replace(POSTAL, "[adress]");
+  text = redactSignatures(text.replace(GLUED_SIGN_OFF, "$1 [namn]")).replace(SLASH_NAME, "$1/[namn]");
+  text = text.replace(EMAIL, "[e-post]").replace(EMAIL_SPACED, "[e-post]").replace(URL_PATTERN, "[länk]");
+  text = text.replace(PERSONNUMMER, "[personnummer]").replace(PHONE, "[telefon]").replace(VIN, "[vin]").replace(LONG_NUMBER, "[nummer]");
+  text = text.replace(BIRTH_DATE, "[nummer]").replace(HANDLE, "[konto]");
+  text = text.replace(PLATE, "[regnr]").replace(PLATE_AFTER_LABEL, "$1[regnr]").replace(PLATE_ANY_CASE, "[regnr]");
+  text = text.replace(STREET, "[adress]").replace(POSTAL, "[adress]");
   // Whole display names first, then sellers (pseudonyms), then the customer's own values.
   const literals = [...(known.literals ?? new Map<string, string>())].sort((a, b) => b[0].length - a[0].length);
   for (const [value, alias] of literals) text = replaceLiteral(text, value, alias);
@@ -169,7 +222,13 @@ export function leakReason(text: string, known: KnownPersonalData): LeakReason |
   if (new RegExp(PERSONNUMMER.source).test(text)) return "personnummer";
   if (new RegExp(PHONE.source).test(text)) return "phone";
   const lower = text.toLowerCase();
-  const present = (v: string) => v.trim().length >= 3 && wordPattern(v.trim().toLowerCase(), "u").test(lower);
+  const present = (v: string) => {
+    const t = v.trim();
+    if (t.length < 3) return false;
+    // Same rule as replaceLiteral: an everyday word counts as a name only when capitalised.
+    if (WORD_NAME_PARTS.has(t.toLowerCase())) return wordPattern(t[0].toUpperCase() + t.slice(1).toLowerCase(), "u").test(text);
+    return wordPattern(t.toLowerCase(), "u").test(lower);
+  };
   if (known.customer.flatMap(variants).some(present)) return "customer";
   if ([...known.sellers.keys()].flatMap(variants).some(present)) return "seller";
   if ([...(known.literals?.keys() ?? [])].some(present)) return "seller";

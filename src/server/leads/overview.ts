@@ -27,11 +27,14 @@ import type {
 } from "@/lib/leads/types";
 import { OPPORTUNITY_TYPES } from "@/lib/leads/types";
 import { defaultChatModel } from "@/server/ai/models";
-import { getThreadUrlTemplate, leadStore, listLeadInboxes, listLeadRegions, listLeadRows, listSyncs, sellerNames, type StoredAnalysis } from "@/server/data/leads";
+import type { DialogueNeeds } from "@/lib/leads/needs";
+import { getThreadUrlTemplate, leadStore, listLeadInboxes, listLeadRegions, listLeadRows, listSyncs, sellerNames, type StoredAnalysis, type StoredNeeds } from "@/server/data/leads";
 
 import { ANALYSIS_VERSION } from "./analysis";
 import { businessMinutesBetween, startOfStockholmDate, stockholmTime } from "./business-hours";
 import { coverage, type SyncRecord } from "./coverage";
+import { NEEDS_VERSION } from "./needs";
+import { isNeedsFilter, matchesNeeds, needsOverview, needsReason } from "./needs-stats";
 import { median } from "./stats";
 
 /**
@@ -395,7 +398,8 @@ export function isWaiting(row: LeadRow, c: StoredAnalysis["classification"] | un
 }
 
 /** Whether a lead belongs to an evidence filter (also used by the lead chat for its "Visa alla" sets). */
-export function matches(filter: EvidenceFilter, row: LeadRow, a: StoredAnalysis | undefined, now: Date): boolean {
+export function matches(filter: EvidenceFilter, row: LeadRow, a: StoredAnalysis | undefined, now: Date, needs?: DialogueNeeds): boolean {
+  if (isNeedsFilter(filter)) return matchesNeeds(filter, needs, a);
   const c = a?.classification;
   if (filter.startsWith("opportunity:")) return Boolean(c?.assessment?.opportunities?.includes(filter.slice(12) as OpportunityType));
   if (filter.startsWith("strength:")) return Boolean(c?.assessment?.strengths?.includes(filter.slice(9) as StrengthType));
@@ -429,7 +433,8 @@ export function matches(filter: EvidenceFilter, row: LeadRow, a: StoredAnalysis 
   }
 }
 
-function reasonFor(filter: EvidenceFilter | null, row: LeadRow, a: StoredAnalysis | undefined, now: Date): string | null {
+function reasonFor(filter: EvidenceFilter | null, row: LeadRow, a: StoredAnalysis | undefined, now: Date, needs?: DialogueNeeds): string | null {
+  if (filter && isNeedsFilter(filter)) return needsReason(filter, needs);
   const c = a?.classification;
   const days = row.lastCustomerMessageAt ? Math.floor(businessMinutesBetween(new Date(row.lastCustomerMessageAt), now) / (9 * 60)) : null;
   const situation = c?.assessment ? [c.assessment.goal, c.assessment.progressReason].filter(Boolean).join(" – ") : null;
@@ -575,7 +580,10 @@ export async function buildOverview(data: ScopeData, period: Period, today: stri
 
   const model = defaultChatModel();
   const eligible = rows.filter((r) => r.status === "registered_reply" && r.sellerMessages > 0);
-  const analyses = await leadStore().loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, model.id);
+  const [analyses, needs] = await Promise.all([
+    leadStore().loadAnalyses(eligible.map((r) => r.threadId), ANALYSIS_VERSION, model.id),
+    loadNeedsOrNull(rows, model.id),
+  ]);
 
   return {
     scope: data.scope,
@@ -595,7 +603,18 @@ export async function buildOverview(data: ScopeData, period: Period, today: stri
     response: responseDistribution(rows, prevCov.complete ? prevRows : null),
     virtual: virtualStats(rows, data.scope.type === "all" ? regionName : null, data.scope.type === "inbox" ? null : data.scopeInboxes),
     ai: { analysed: eligible.filter((r) => analyses.has(r.threadId)).length, eligible: eligible.length, analysisVersion: ANALYSIS_VERSION },
+    needs: needs ? needsOverview(rows, needs) : null,
   };
+}
+
+/** Stored lead-needs-1 labels for leads with a customer message; null when they cannot be read. */
+export async function loadNeedsOrNull(rows: LeadRow[], model: string): Promise<Map<string, StoredNeeds> | null> {
+  try {
+    return await leadStore().loadNeeds(rows.filter((r) => r.customerMessages > 0).map((r) => r.threadId), NEEDS_VERSION, model);
+  } catch {
+    console.error("[leads] stored needs could not be read");
+    return null;
+  }
 }
 
 /** The leads behind an insight or an AI finding – structured, avidentified reasons and HubSpot links. */
@@ -608,9 +627,15 @@ export async function evidence(
   const ids = data.scopeInboxes.map((i) => i.id);
   const rows = within(await listLeadRows(ids, startOfStockholmDate(period.from), startOfStockholmDate(addDays(period.to, 1))), period.from, period.to);
   const model = defaultChatModel();
-  const analyses = await leadStore().loadAnalyses(rows.map((r) => r.threadId), ANALYSIS_VERSION, model.id);
+  const needsFilter = !!selection.filter && isNeedsFilter(selection.filter);
+  const [analyses, needs] = await Promise.all([
+    leadStore().loadAnalyses(rows.map((r) => r.threadId), ANALYSIS_VERSION, model.id),
+    needsFilter ? loadNeedsOrNull(rows, model.id) : Promise.resolve(null),
+  ]);
   const wanted = selection.threadIds ? new Set(selection.threadIds) : null;
-  const picked = rows.filter((r) => (wanted ? wanted.has(r.threadId) : selection.filter ? matches(selection.filter, r, analyses.get(r.threadId), now) : false));
+  const picked = rows.filter((r) =>
+    wanted ? wanted.has(r.threadId) : selection.filter ? matches(selection.filter, r, analyses.get(r.threadId), now, needs?.get(r.threadId)?.needs) : false,
+  );
   const [names, template] = await Promise.all([sellerNames([...new Set(picked.flatMap((r) => (r.responderId ? [r.responderId] : r.ownerId ? [r.ownerId] : [])))]), getThreadUrlTemplate()]);
   const inboxName = new Map(data.scopeInboxes.map((i) => [i.id, i.name]));
   return picked
@@ -622,7 +647,7 @@ export async function evidence(
       vehicle: [r.vehicleBrand, r.vehicleModel].filter(Boolean).join(" ") || r.vehicle,
       status: r.status,
       seller: (r.responderId ?? r.ownerId) ? (names.get((r.responderId ?? r.ownerId)!) ?? "Okänd användare") : null,
-      reason: reasonFor(selection.filter ?? null, r, analyses.get(r.threadId), now),
+      reason: reasonFor(selection.filter ?? null, r, analyses.get(r.threadId), now, needs?.get(r.threadId)?.needs),
       hubspotUrl: threadUrl(template, r.threadId),
     }))
     .sort((a, b) => b.arrivedAt.localeCompare(a.arrivedAt));

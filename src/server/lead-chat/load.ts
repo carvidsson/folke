@@ -16,8 +16,10 @@ import {
   listSyncs,
   sellerNames,
   type StoredAnalysis,
+  type StoredNeeds,
 } from "@/server/data/leads";
 import { ANALYSIS_VERSION } from "@/server/leads/analysis";
+import { NEEDS_VERSION } from "@/server/leads/needs";
 import { startOfStockholmDate, stockholmTime } from "@/server/leads/business-hours";
 import { coverage } from "@/server/leads/coverage";
 
@@ -137,6 +139,17 @@ export async function loadSelection(
     const run = runs.find((r) => r.from === period.from && r.to === period.to && r.analysisVersion === ANALYSIS_VERSION && r.summary && "findings" in r.summary);
     runFindings = run ? (run.summary as AISummary).findings.map((f) => ({ title: f.title, text: f.text, kind: f.kind, threadIds: f.threadIds })) : null;
   }
+  // lead-needs-1 (ADR-052): every lead with a customer message (also without a seller reply).
+  let needs: Map<string, StoredNeeds> | null = null;
+  if (modules.has("needs")) {
+    const candidates = rows.filter((r) => r.customerMessages > 0 && (!seller || r.responderId === seller.id || r.ownerId === seller.id));
+    needs = await leadStore(supabase)
+      .loadNeeds(candidates.map((r) => r.threadId), NEEDS_VERSION, defaultChatModel().id)
+      .catch(() => {
+        console.error("[chat/lead] stored needs could not be read");
+        return null;
+      });
+  }
   const analysesMs = Date.now() - t1;
 
   return {
@@ -157,6 +170,7 @@ export async function loadSelection(
       coverage: cov,
       prevCoverage: prevCov,
       analyses,
+      needs,
       analysisVersion: ANALYSIS_VERSION,
       runFindings,
       threadUrlTemplate: template,

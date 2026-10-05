@@ -133,7 +133,7 @@ function matchSellers(q: Set<string>, entities: LeadEntities, text: string) {
 
 /** Words after "för" or "hos" that are not names. */
 const NOT_NAMES = new Set(
-  "oss er dem mig dig honom henne sig teamet säljarna säljare säljaren gruppen regionen inkorgen inkorgarna alla resten övriga perioden månaden veckan året kunderna kunden leads leadsen dem detta det den denna vår våra mitt min er era hubspot folke leadanalys blocket wayke bytbil bilweb tradera hemsidan dms säljsystemet telefon januari februari mars april maj juni juli augusti september oktober november december".split(" ").map(fold),
+  "oss er dem mig dig honom henne sig teamet säljarna säljare säljaren gruppen regionen inkorgen inkorgarna alla resten övriga perioden månaden veckan året kunderna kunden leads leadsen dem detta det den denna vår våra mitt min er era hubspot folke leadanalys blocket wayke bytbil bilweb tradera hemsidan hemsida dms säljsystemet telefon virtuell virtuella privatleasing leasing inbyte inbyten företag företagen finansiering billån behov behoven kundbehov kombinationer alternativ köpsignaler leverans januari februari mars april maj juni juli augusti september oktober november december".split(" ").map(fold),
 );
 
 /**
@@ -269,6 +269,11 @@ export function resolveTurn(input: {
       ? [...new Set([...(base.intents.includes("response_time") ? (["response_time"] as const) : []), ...parsed.intents])]
       : [...new Set([...base.intents.filter((i) => i !== "examples" && i !== "explain"), ...parsed.intents])];
   }
+  // A follow-up on customer needs that only names a dimension ("bland Blocket-leads", "Virtuell") or asks
+  // for examples or why keeps the needs: it narrows the question, it does not change the subject.
+  const dimensionOnly = parsed.intents.length > 0 && parsed.intents.every((i) => i === "source" || i === "virtual" || i === "examples" || i === "explain");
+  if (base?.intents.includes("needs") && dimensionOnly && !intents.includes("needs")) intents = [...intents, "needs"];
+  const needsFocus = parsed.needsFocus.length ? parsed.needsFocus : intents.includes("needs") && (!parsed.intents.length || dimensionOnly) ? (base?.needsFocus ?? []) : [];
   // "Är det samma för resten?" repeats the previous question for the wider selection. After examples
   // or patterns it also needs the counts for the wider selection – examples alone cannot answer it.
   if (parsed.widen && !parsed.intents.length && base?.intents.length) {
@@ -297,6 +302,7 @@ export function resolveTurn(input: {
       intents,
       comparison,
       focus: parsed.sameKind || (!parsed.intents.length && base) ? (base?.focus ?? []) : [],
+      needsFocus,
     },
   };
 }

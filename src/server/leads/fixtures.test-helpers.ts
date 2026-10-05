@@ -1,5 +1,5 @@
 import type { LeadRow } from "@/lib/leads/types";
-import type { LeadStore, NewAnalysis, RunRecord, StoredAnalysis, ThreadState } from "@/server/data/leads";
+import type { LeadStore, NewAnalysis, NewNeeds, RunRecord, StoredAnalysis, StoredNeeds, ThreadState } from "@/server/data/leads";
 
 import type { HubSpotMessage, HubSpotThread } from "./hubspot";
 
@@ -112,6 +112,7 @@ export class MemoryLeadStore implements LeadStore {
   threads = new Map<string, LeadRow & { factsVersion: number }>();
   /** Key: thread|version|model – the database's unique key. */
   analyses = new Map<string, NewAnalysis & { analysisVersion: string; model: string; writes: number; analysedAt: string }>();
+  needs = new Map<string, NewNeeds & { writes: number; analysedAt: string }>();
   runs: RunRecord[] = [];
   syncs: { inboxId: string; from: string; to: string; leads: number; complete: boolean }[] = [];
 
@@ -144,6 +145,20 @@ export class MemoryLeadStore implements LeadStore {
       this.analyses.set(key, { ...r, analysisVersion, model, analysedAt: new Date().toISOString(), writes: (this.analyses.get(key)?.writes ?? 0) + 1 });
     }
   }
+  async loadNeeds(threadIds: string[], needsVersion: string, model: string) {
+    const out = new Map<string, StoredNeeds>();
+    for (const id of threadIds) {
+      const n = this.needs.get(`${id}|${needsVersion}|${model}`);
+      if (n) out.set(id, { fingerprint: n.fingerprint, sourceLatestMessageAt: n.sourceLatestMessageAt, analysedAt: n.analysedAt, needs: n.needs });
+    }
+    return out;
+  }
+  async saveNeeds(rows: NewNeeds[], needsVersion: string, model: string) {
+    for (const r of rows) {
+      const key = `${r.threadId}|${needsVersion}|${model}`;
+      this.needs.set(key, { ...r, analysedAt: new Date().toISOString(), writes: (this.needs.get(key)?.writes ?? 0) + 1 });
+    }
+  }
   async saveRun(run: RunRecord) {
     this.runs.push(run);
     return `run-${this.runs.length}`;
@@ -163,6 +178,6 @@ export class MemoryLeadStore implements LeadStore {
   }
   /** Everything except the seller table (where employee names belong). */
   analysisData() {
-    return JSON.stringify({ threads: [...this.threads.values()], analyses: [...this.analyses.values()], runs: this.runs });
+    return JSON.stringify({ threads: [...this.threads.values()], analyses: [...this.analyses.values()], needs: [...this.needs.values()], runs: this.runs });
   }
 }

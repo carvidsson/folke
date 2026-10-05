@@ -18,8 +18,45 @@ export function rx(source: string): RegExp {
   return new RegExp(source.split(String.raw`\b`).join(BOUNDARY), "u");
 }
 
+/**
+ * lead-needs-1 (ADR-052): what customers ask for. The words name a need, a request, a purchase signal or
+ * the car that could not be had – each also sets the question's focus (NEEDS_FOCUS below).
+ */
+const NEEDS_FOCUS: [string, RegExp][] = [
+  ["need:private_leasing", rx(String.raw`privatleas|privat leas`)],
+  ["need:business", rx(String.raw`företag|förmånsbil|tjänstebil|\bmoms`)],
+  ["need:leasing", rx(String.raw`(?<!privat)leasing|\bleasa`)],
+  ["need:financing", rx(String.raw`finansier|billån|avbetal|\blån\b`)],
+  ["need:monthly_cost", rx(String.raw`månadskostnad|kostnad per månad`)],
+  ["need:trade_in", rx(String.raw`inbyte|byta in|inbytesbil`)],
+  ["need:availability", rx(String.raw`lagerstatus|finns kvar|i lager|lagerbil|tillgänglig`)],
+  ["need:delivery", rx(String.raw`leverans|leveranstid|snabbt få|bråttom`)],
+  ["need:home_delivery", rx(String.raw`hemleverans|leverera hem|transport`)],
+  ["need:price_negotiation", rx(String.raw`rabatt|pruta|prisförhandl|förhandl|\bbud\b`)],
+  ["need:product_facts", rx(String.raw`utrustning|skick|räckvidd|batteri`)],
+  ["need:factory_order", rx(String.raw`beställningsbil|fabriksbeställ|nybeställ`)],
+  ["request:send_offer", rx(String.raw`offert|kalkyl`)],
+  ["request:call_me", rx(String.raw`uppringd|ringa upp|bli ringd`)],
+  ["request:book_visit", rx(String.raw`provkör|besök`)],
+  ["request:value_trade_in", rx(String.raw`värder`)],
+  ["strong_signal", rx(String.raw`köpsignal|vill köpa|köpklar|redo att köpa|vill reservera|handpenning`)],
+  ["soon", rx(String.raw`inom kort|\bsnart\b|snabbt köpa|inom en månad`)],
+  ["unavailable", rx(String.raw`\bsåld\b|\bsålda\b|reserverad|inte (gick|går) att få|ursprungsbil|bilen (inte )?finns (inte )?kvar|alternativ`)],
+  ["next_step", rx(String.raw`nästa steg`)],
+];
+
+const NEEDS_WORDS = rx(
+  String.raw`frågar (kunderna |kunden )?(mest |oftast )?(om|efter)|efterfråga|kundbehov|\bbehov|önskemål|vad vill kunderna|vad ber kunderna|kombin|vanligast`,
+);
+
+/** The focus of a needs question: the labels it names, in a fixed order. Pure. */
+export function needsFocusOf(q: string): string[] {
+  return NEEDS_FOCUS.filter(([, re]) => re.test(q)).map(([f]) => f);
+}
+
 const INTENT_PATTERNS: [LeadIntent, RegExp][] = [
-  ["response_time", rx(String.raw`svarstid|svarar|snabb|långsam|reaktionstid|tid till (första )?svar|dröj|väntetid|hur fort|hur lång tid`)],
+  // "snabb leverans" is a need, not a response time.
+  ["response_time", rx(String.raw`svarstid|svarar|snabb(?!\S* leverans)|långsam|reaktionstid|tid till (första )?svar|dröj|väntetid|hur fort|hur lång tid`)],
   ["source", rx(String.raw`källa|källor|blocket|hemsida|webben|webbplats|sajt|wayke|bytbil|bilweb|tradera|kanal|var .* kommer ifrån`)],
   ["virtual", rx(String.raw`virtuell`)],
   ["comparison", rx(String.raw`förra (månaden|perioden|veckan)|föregående|jämför|blivit (bättre|sämre)|(bättre|sämre) än|förändr|ökat|minskat|utvecklats|\btrend|än tidigare`)],
@@ -73,6 +110,8 @@ export interface PeriodRequest {
 export interface ParsedQuestion {
   /** Intents the question itself names (empty: a follow-up or an open question). */
   intents: LeadIntent[];
+  /** lead-needs-1: the needs, requests or signals the question names (empty: none). */
+  needsFocus: string[];
   examples: ExampleRequest | null;
   period: PeriodRequest | null;
   /** "resten", "övriga": widen the previous selection one step. */
@@ -90,9 +129,12 @@ export function normalizeQuestion(text: string) {
 
 export function parseQuestion(text: string, today: string): ParsedQuestion {
   const q = normalizeQuestion(text);
+  const needsFocus = needsFocusOf(q);
   const intents = INTENT_PATTERNS.filter(([, re]) => re.test(q)).map(([intent]) => intent);
+  if ((needsFocus.length || NEEDS_WORDS.test(q)) && !intents.includes("needs")) intents.push("needs");
   return {
     intents,
+    needsFocus,
     examples: intents.includes("examples") ? exampleRequest(q) : null,
     period: periodFromText(q, today),
     widen: WIDEN.test(q) && !ALL.test(q),

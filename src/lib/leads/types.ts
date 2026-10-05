@@ -1,3 +1,5 @@
+import type { CarriedGroup, CustomerRequest, Need, NeedsOverview, PurchaseSignal, Unavailable } from "./needs";
+
 /**
  * The lead analysis report as the admin page receives it (ADR-046, ADR-047).
  *
@@ -280,7 +282,8 @@ export interface AISummary {
   caveats: string[];
 }
 
-export type NotAnalysedReason = "no_registered_reply" | "redaction_check" | "failed" | "limit" | "time_limit" | "no_stored_analysis";
+/** needs_pending: dialogues whose needs analysis (lead-needs-1) is still to do – the next click continues. */
+export type NotAnalysedReason = "no_registered_reply" | "redaction_check" | "failed" | "limit" | "time_limit" | "no_stored_analysis" | "needs_pending";
 
 /** Counts over the AI-analysed dialogues (their number is the population of every count). */
 export interface AICounts {
@@ -300,6 +303,8 @@ export interface AICounts {
   agreedNextStep?: number;
   opportunities?: Partial<Record<OpportunityType, number>>;
   strengths?: Partial<Record<StrengthType, number>>;
+  /** lead-needs-1 (ADR-052): coverage of the needs analysis among the inbox's leads in the period. */
+  needs?: { candidates: number; analysed: number; analysedNew: number; pending: number };
 }
 
 /** A stored AI analysis as the page shows it: a run (just made or reopened) and its result. */
@@ -485,7 +490,18 @@ export type EvidenceFilter =
   | `opportunity:${OpportunityType}`
   | `strength:${StrengthType}`
   | `source:${string}`
-  | `bucket:${string}`;
+  | `bucket:${string}`
+  // lead-needs-1 (ADR-052)
+  | `need:${Need}`
+  | `request:${CustomerRequest}`
+  | `signal:${PurchaseSignal}`
+  | `combo:${Need}+${Need}`
+  | "unavailable"
+  | `unavailable:${Exclude<Unavailable, "none">}`
+  | `carried:${CarriedGroup}`
+  | "strong_signal"
+  | "soon"
+  | "signal_no_next_step";
 
 export interface Insight {
   id: string;
@@ -545,6 +561,8 @@ export interface LeadOverview {
   response: ResponseDistribution;
   virtual: VirtualStats;
   ai: { analysed: number; eligible: number; analysisVersion: string };
+  /** lead-needs-1 (ADR-052): what the customer asks for; null when it could not be read. */
+  needs: NeedsOverview | null;
 }
 
 export interface RunSummaryInfo {

@@ -648,6 +648,51 @@ Fel som rättades under valideringen:
 
 ---
 
+### ADR-052 – Vad kunderna frågar efter (lead-needs-1)
+
+**Sammanhang:**
+- Leadanalys visade bara ett huvudsakligt ärende per dialog (`intent` i lead-ai-3.1). Staplarna låg sist i AI-avsnittet och syntes bara för en körning med exakt samma urval och period.
+- Ett enda värde döljer det mesta. Leasing, inbyte och leverans nämndes i fler dialoger än de som fick det som huvudärende, och privatleasing och företag gick inte att skilja ut.
+
+**Beslut:**
+- **En egen, versionerad klassificering per dialog: `lead-needs-1`.** Den gör ett separat AI-anrop över samma avidentifierade text som leadanalysen (`prepareDialogue`, med numrerade meddelanden). Den sparas i `lead_dialogue_needs`, så att taxonomin och säljarbedömningen kan byta version oberoende av varandra. Den omfattar alla leads med ett meddelande från kunden, även utan säljsvar.
+- **Taxonomin har tre delar:**
+  - **Behov:** privatleasing, företag, leasing (oklart vilken), finansiering, månadskostnad, inbyte, om bilen finns kvar, snabb leverans, leveranstid, leverans hem, rabatt eller prisförhandling, utrustning eller fakta, beställa ny bil.
+  - **Köpsignaler:** vill köpa, vill reservera, bud, frågar hur man går vidare, lämnar offertuppgifter, jämför med annat erbjudande.
+  - **Förfrågningar:** offert eller kalkyl, bli uppringd, besök eller provkörning, mer information, värdering av inbytesbil, hitta en annan bil.
+  - Utöver det: köp inom kort (cirka en månad), ärendetyp (köp, efter köpet, annat) och vad som hände när bilen inte gick att få (såld, reserverad, finns inte, pris passade inte, leveranstid passade inte → fördes synligt vidare, inget sådant syns, går inte att avgöra, kunden avslutade).
+- **Bara kunden räknas.** Varje etikett måste peka på ett kundmeddelande (`M3`) eller ett formulärfält. Annars tas den bort på servern. Ämnen som säljaren tar upp sparas separat (`sellerTopics`) och räknas aldrig som kundbehov. "Inte nämnt" betyder aldrig "nej", och kunden kan uttryckligen avböja (`declined`).
+- **Ordkontroller på servern** stoppar etiketter vars kundmeddelande saknar de ord som krävs. Exempel: privatleasing utan "privat" blir leasing (oklart vilken), företag kräver bolag, moms eller förmånsbil, och värdering kräver "värd", "inbytespris" och liknande. Kontrollerna tar bara bort, de lägger aldrig till.
+- **Formulärfält ger etiketter utan AI:** inbytesbil i formuläret, bolag i formuläret och provkörningsformulär.
+- **Alla siffror räknas på servern** (`needs-stats.ts`): andelar bland köpdialoger med behovsanalys, kombinationer och korsning med HubSpot-fakta (källa, Virtuell, inkorg). Modellen formulerar, men räknar aldrig.
+- **Kombinationer visas bara som par** med minst 8 dialoger och minst 5 % av minst 30 köpdialoger. Grupper under 20 dialoger märks "litet underlag".
+- **Ett jobb för båda analyserna.** Behovsanalysen körs i samma serverjobb som leadanalysen (ADR-051), med samma tidsbudget och kostnadsgränser. Batcherna varvas. En sparad analys återanvänds så länge trådens senaste meddelande är oförändrat. Högst 200 nya per körning (nyaste först), och resten fortsätter vid nästa klick (`needs_pending`).
+- **Presentation:**
+  - Leadanalys har ett sparsamt avsnitt, "Vad kunderna frågar efter": täckning, behov, förfrågningar, köpsignaler, kombinationer och när bilen inte gick att få. Varje siffra öppnar leadsen bakom den.
+  - Chatten har en egen modul med mått, mängder och exempel. Följdfrågor om källa eller Virtuell behåller behovsfokus. Saknas behovsanalys erbjuds knappen "Analysera dialogerna", men Folke startar ingenting själv.
+
+**Validering (2026-10-04):**
+- 110 avidentifierade riktiga dialoger i fyra omgångar, och därefter ett separat kontrollurval på 63 dialoger som metoden inte justerades mot. Kontrollurvalet gav 135–137 korrekta av 139 etiketter.
+- Stabilitet mellan körningar: cirka 84 %. "Fördes vidare" räknas i grupper, eftersom typen av steg varierar mellan körningar.
+- `price` blev `price_negotiation` och "later" togs bort ur tidsramen. Båda var för osäkra.
+- Kostnad: cirka 0,00013–0,00017 USD per dialog (`low`).
+
+**Alternativ som valdes bort:**
+- Härleda behov ur `intent` eller lead-ai-3.1:s fritext (för låg täckning och inte pålitligt).
+- Lägga fälten i lead-ai-3.2 (varje ändring av taxonomin skulle tvinga fram en ny analys av allt).
+- `reasoning: medium` (dubbelt så långsamt och dyrt, utan bättre precision efter ordkontrollerna).
+
+**Avidentifieringen rättades i samma arbete** (regnr med gemener, VIN, födelsedatum, konton, namn vid "mvh" och "/Namn", e-post med mellanslag, adress efter etikett; se SECURITY.md).
+- Leadanalysen behåller `lead-ai-3.1`. Rättningen maskerar fler identifierare men ändrar inte vad som klassificeras, och en ny version skulle tvinga fram en ny analys av allt.
+- Nya och ändrade dialoger skickas med den rättade avidentifieringen.
+- Sparade AI-texter i folke-dev och beta söktes igenom efter regnr, VIN, födelsedatum, e-post och konton (2026-10-04). Inga identifierare hittades, bara prisformer som "för 450 000".
+
+**Begränsningar:**
+- Köpsignaler missas oftare än de sätts fel, särskilt "vill köpa". Siffrorna är snarare för låga än för höga.
+- Ett samtal eller en offert från säljsystemet syns inte. Därför är "inget sådant syns" ingen bedömning av säljaren.
+
+---
+
 ## Öppna beslut
 
 

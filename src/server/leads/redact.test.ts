@@ -24,6 +24,50 @@ describe("redaction", () => {
     expect(out).toContain("[länk]");
   });
 
+  it("removes plates in lower case, VINs, dates of birth and handles (shapes seen 2026-10-04)", () => {
+    const text = [
+      "Inbyte audi a4 allroad-2018 abc12d och min andra bil reg.nr. def 34g, miltal 3900.",
+      "Kan ni kolla mot VIN WVWZZZ1KZ0W000000?",
+      "Hej absolut, 900101 inga vinterdäck.",
+      "Följ oss på @testforetaget",
+    ].join("\n");
+    const out = redactText(text, known);
+    expect(out).not.toMatch(/abc12d|def 34g|WVWZZZ|900101|@testforetaget/i);
+    expect(out).toContain("[regnr]");
+    expect(out).toContain("[vin]");
+    expect(out).toContain("[konto]");
+  });
+
+  it("removes a name on the sign-off line, a slash signature and an address after its label", () => {
+    // The sign-off comes last: the lines after it are a signature anyway.
+    const text = ["Finns den kvar? /Okänd", "Faktura adress.", " Okänd x Okändsväg 73", "Leveransadress: Någonstans 1", "Tycker att inbytespriset är för lågt.", "mvh okänd"].join("\n");
+    const out = redactText(text, known);
+    expect(out).not.toMatch(/okänd|Någonstans/i);
+    expect(out).toContain("mvh [namn]");
+    expect(out).toContain("/[namn]");
+    expect(out).toContain("Faktura adress.\n[adress]");
+    expect(out).toContain("Leveransadress: [adress]");
+  });
+
+  it("removes a long signature on the sign-off line and an e-mail address written with spaces", () => {
+    const out = redactText("Vi kommer på lördag.\nMvh. Okänd Okändsson, okand15@folke. example. Mob 070 000 00 02 och mer text på samma rad", known);
+    expect(out).toBe("Vi kommer på lördag.\nMvh. [namn]");
+    expect(redactText("Skriv till okand@ folke.example tack", known)).toBe("Skriv till [e-post] tack");
+  });
+
+  it("masks a name glued to the sign-off, and keeps everyday words that are also seller names", () => {
+    expect(redactText("Ska leta efter något billigare.\nMvhOkänd", known)).toBe("Ska leta efter något billigare.\nMvh [namn]");
+    const per: KnownPersonalData = { customer: [], sellers: new Map([["Per Testsson", "Säljare 1"]]) };
+    expect(redactText("Jag kör 1500 mil per år. Hälsa Per!", per)).toBe("Jag kör 1500 mil per år. Hälsa Säljare 1!");
+    expect(leaksPersonalData("Jag kör 1500 mil per år.", per)).toBe(false);
+    expect(leaksPersonalData("Fråga Per om det.", per)).toBe(true);
+  });
+
+  it("keeps ordinary numbers that only look like the shapes above", () => {
+    const text = "Kör 150 mil i veckan, för 205 000 kr. Totalt 579900:- och 100000 kr i inbyte. TSI150 och kWh. Bild image001.jpg@01DD36EB.";
+    expect(redactText(text, known)).toBe(text);
+  });
+
   it("keeps business context: cars, prices, engine codes", () => {
     const out = redactText("Golf GTI 245 hk och Passat TDI 150 för 299 900 kr, leverans vecka 42.", known);
     expect(out).toBe("Golf GTI 245 hk och Passat TDI 150 för 299 900 kr, leverans vecka 42.");

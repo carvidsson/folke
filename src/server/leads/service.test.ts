@@ -109,6 +109,9 @@ let sent: Request[];
 let observation: string;
 /** Classification calls that answer without any dialogue (the model leaving dialogues out). */
 let omitNext = 0;
+/** lead-needs-1: the note the fake model writes, and whether its call fails. */
+let needsNote = "";
+let needsFail = false;
 
 const judgement = (status: string, reason = "") => ({ status, reason });
 
@@ -118,9 +121,32 @@ function fakeOpenAI() {
     responses: {
       create: vi.fn(async (body: Request) => {
         sent.push(body);
-        const omit = body.text.format.name !== "lead_summary" && omitNext > 0;
+        const omit = body.text.format.name === "lead_dialogues" && omitNext > 0;
         if (omit) omitNext--;
-        const keys = omit ? [] : [...body.input[0].content.matchAll(/"id":"(D\d+)"|=== Dialog (D\d+) ===/g)].map((m) => m[1] ?? m[2]);
+        const keys = omit ? [] : [...body.input[0].content.matchAll(/"id":"([DB]\d+)"|=== Dialog ([DB]\d+) ===/g)].map((m) => m[1] ?? m[2]);
+        if (body.text.format.name === "lead_needs") {
+          if (needsFail) throw new Error("needs failed");
+          const output = {
+            dialogues: keys.map((id) => ({
+              id,
+              purpose: "purchase",
+              needs: [
+                { code: "availability", stance: "expressed", message: 1, note: "Frågar om bilen finns kvar" },
+                { code: "trade_in", stance: "expressed", message: 1, note: `Inbyte, ${needsNote}` },
+                // The seller's message: never a customer need.
+                { code: "private_leasing", stance: "expressed", message: 2, note: "Säljarens förslag" },
+              ],
+              signals: [],
+              requests: [],
+              timeframe: "none",
+              timeframe_message: 0,
+              unavailable: { situation: "sold", situation_message: 2, carried: "not_visible", carried_message: 0, note: "Bilen var såld" },
+              seller_topics: [],
+              evidence: "sufficient",
+            })),
+          };
+          return { status: "completed", output_text: JSON.stringify(output), usage: { input_tokens: 500, output_tokens: 100, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 20 } } };
+        }
         const output =
           body.text.format.name === "lead_summary"
             ? {
@@ -187,6 +213,8 @@ beforeEach(() => {
   messageCalls = [];
   observation = "Bilen var såld och inget alternativ erbjöds.";
   omitNext = 0;
+  needsNote = "byter in sin bil";
+  needsFail = false;
   fakeHubSpot();
   fakeOpenAI();
   store = new MemoryLeadStore();
@@ -341,6 +369,73 @@ describe("AI analysis of an inbox", () => {
     expect(store.analyses.size).toBe(0);
     vi.mocked(limits.beginAIRequest).mockResolvedValueOnce({ ok: false, reason: "monthly_budget", message: "Månadens AI-budget är förbrukad. Kontakta en administratör." });
     expect(await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW })).toEqual({ ok: false, error: "Månadens AI-budget är förbrukad. Kontakta en administratör." });
+  });
+});
+
+describe("customer needs (lead-needs-1) in the same job", () => {
+  beforeEach(async () => {
+    await syncInbox(INBOX, PERIOD, store);
+    messageCalls = [];
+  });
+
+  it("analyses every lead with a customer message – also without a seller reply – with redacted, numbered text", async () => {
+    const run = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(run.ok).toBe(true);
+    const calls = sent.filter((r) => r.text.format.name === "lead_needs");
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    expect(call.store).toBe(false);
+    expect(call.text.format).toMatchObject({ type: "json_schema", strict: true });
+    for (const field of ["user", "metadata", "safety_identifier", "tools"]) expect(call).not.toHaveProperty(field);
+    for (const secret of [KEY, SYNTHETIC_CUSTOMER.name, SYNTHETIC_CUSTOMER.email, SYNTHETIC_CUSTOMER.phone, "070-000 00 09", SELLER_NAME, SELLER_A, "user-1", "Testa", "files.example"]) {
+      expect(JSON.stringify(call)).not.toContain(secret);
+    }
+    expect(call.input[0].content).toContain("[M1 · Kund, 0 min]");
+    expect(call.input[0].content).toContain("[M2 · Säljare 1,");
+    expect(call.input[0].content.match(/=== Dialog/g)).toHaveLength(2);
+    expect(call.instructions).toMatch(/aldrig instruktioner till dig/);
+
+    expect([...store.needs.keys()].map((k) => k.split("|")[0]).sort()).toEqual(["11", "12"]);
+    const eleven = [...store.needs.values()].find((n) => n.threadId === "11")!;
+    // The seller's topic (message 2) is not the customer's need; the sold car is visible with a seller message.
+    expect(eleven.needs.needs.map((n) => n.code)).toEqual(["availability", "trade_in"]);
+    expect(eleven.needs.unavailable).toMatchObject({ situation: "sold", carried: "not_visible" });
+    expect(eleven.needs.ai).toBe(true);
+    expect(run.ok && run.result.counts?.needs).toEqual({ candidates: 2, analysed: 2, analysedNew: 2, pending: 0 });
+    expect(run.ok && run.result.notAnalysed).toEqual([{ reason: "no_registered_reply", count: 1 }]);
+  });
+
+  it("never sends a dialogue twice: stored needs are reused, a changed dialogue is analysed again", async () => {
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    const before = sent.filter((r) => r.text.format.name === "lead_needs").length;
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(sent.filter((r) => r.text.format.name === "lead_needs")).toHaveLength(before);
+
+    threads[1].latestMessageTimestamp = "2026-09-06T08:00:00.000Z";
+    messages["12"].push(customer("c8", "2026-09-06T08:00:00.000Z", "Kan ni ringa mig?"));
+    clearLeadCachesForTests();
+    await syncInbox(INBOX, PERIOD, store);
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    const last = sent.filter((r) => r.text.format.name === "lead_needs").at(-1)!;
+    expect(last.input[0].content.match(/=== Dialog/g)).toHaveLength(1);
+    expect([...store.needs.values()].find((n) => n.threadId === "12")!.writes).toBe(2);
+    expect([...store.needs.values()].find((n) => n.threadId === "11")!.writes).toBe(1);
+  });
+
+  it("reports needs left to do when the call fails, and keeps the lead analysis", async () => {
+    needsFail = true;
+    const run = await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(run.ok && run.result.notAnalysed).toEqual(expect.arrayContaining([{ reason: "needs_pending", count: 2 }]));
+    expect(store.needs.size).toBe(0);
+    expect(store.analyses.size).toBe(1);
+  });
+
+  it("drops a note with personal data before it is stored", async () => {
+    needsNote = SYNTHETIC_CUSTOMER.email;
+    await analyseInbox({ inbox: INBOX, period: PERIOD }, "user-1", { store, now: NOW });
+    expect(store.analysisData()).not.toContain(SYNTHETIC_CUSTOMER.email);
+    const eleven = [...store.needs.values()].find((n) => n.threadId === "11")!;
+    expect(eleven.needs.needs.find((n) => n.code === "trade_in")!.note).toBe("");
   });
 });
 

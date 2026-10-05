@@ -54,6 +54,7 @@ export interface AIStateView {
   eligible: number;
   upToDate: number;
   counts: AICounts | null;
+  needs: { candidates: number; current: number };
 }
 
 /**
@@ -102,6 +103,7 @@ export function LeadAI({
   const job = analysis.view;
   const jobBusy = job.status === "starting" || job.status === "running";
   const outdated = state.eligible - state.upToDate;
+  const needsOutdated = state.needs.candidates - state.needs.current;
 
   function run() {
     setError(null);
@@ -230,13 +232,20 @@ export function LeadAI({
                   : `${ofTotal(outdated, state.eligible, { percentage: false })} dialoger har ändrats eller saknar analys sedan dess – de analyseras vid uppdatering.`}
               </p>
             )}
+            {!historical && scopeType === "inbox" && state.needs.candidates > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {needsOutdated === 0
+                  ? "Kundbehoven är analyserade för alla leads med meddelande från kunden."
+                  : `Kundbehoven saknas eller har ändrats för ${ofTotal(needsOutdated, state.needs.candidates, { percentage: false })} leads med meddelande från kunden – de analyseras i samma körning.`}
+              </p>
+            )}
           </div>
           {allowed && (
             <Button
               onClick={run}
               disabled={pending || jobBusy}
               className="shrink-0"
-              variant={shown && outdated === 0 ? "outline" : "default"}
+              variant={shown && outdated === 0 && needsOutdated === 0 ? "outline" : "default"}
             >
               {shown ? <RefreshCw /> : <Sparkles />}
               {(pending && !openingRun) || jobBusy ? "Analyserar…" : actionLabel}

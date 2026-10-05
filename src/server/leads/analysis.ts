@@ -273,6 +273,8 @@ export function prepareDialogue(
   /** Customer names from every lead in the run: a name may appear in another thread. */
   otherCustomers: string[] = [],
   now = new Date(),
+  /** lead-needs-1: messages are numbered ("M3") so that labels can point at the message they rest on. */
+  options: { numbered?: boolean } = {},
 ): PreparedDialogue | { blocked: LeakReason } {
   const known: KnownPersonalData = {
     customer: [...customerIdentifiers(lead), ...otherCustomers],
@@ -302,15 +304,15 @@ export function prepareDialogue(
   ]
     .filter(Boolean)
     .join(" · ");
-  const render = (m: NormalizedLead["dialogue"][number]) => {
+  const render = ({ m, n }: { m: NormalizedLead["dialogue"][number]; n: number }) => {
     const who = m.role === "customer" ? "Kund" : m.sellerId ? (pseudonyms.get(m.sellerId) ?? "Säljare") : "Säljare";
     const redacted = redactText(m.text, known).slice(0, MAX_MESSAGE_CHARS);
     const files = attachmentLines(m.attachments ?? [], m.role === "seller" ? redacted : "");
     const text = m.role === "seller" && !hasContent(redacted) ? (files ? "" : NO_TEXT) : redacted || (files ? "" : "(tomt meddelande)");
     const body = [text, files].filter(Boolean).join("\n");
-    return `[${who}, ${delta((Date.parse(m.at) - arrived) / 60_000)}]\n${body}`;
+    return `[${options.numbered ? `M${n} · ` : ""}${who}, ${delta((Date.parse(m.at) - arrived) / 60_000)}]\n${body}`;
   };
-  const { head, omitted, tail } = visibleMessages(lead.dialogue);
+  const { head, omitted, tail } = visibleMessages(lead.dialogue.map((m, i) => ({ m, n: i + 1 })));
   const lines = [...head.map(render), ...(omitted ? [`(${omitted} meddelanden däremellan är utelämnade)`] : []), ...tail.map(render)];
   // Keep the end of a long dialogue rather than the beginning.
   const body = lines.join("\n\n");
@@ -326,13 +328,13 @@ export function prepareDialogue(
 // Structured calls
 // ---------------------------------------------------------------------------
 
-type Usage = (usage: UsageReport) => void;
+export type Usage = (usage: UsageReport) => void;
 
 function chatModel(id?: string): ChatModel {
   return (id && CHAT_MODELS.find((m) => m.id === id)) || defaultChatModel();
 }
 
-async function structured<T>(input: {
+export async function structured<T>(input: {
   name: string;
   schema: Record<string, unknown>;
   parse: z.ZodType<T>;
@@ -376,15 +378,15 @@ async function structured<T>(input: {
   return parsed.data;
 }
 
-const strictObject = (properties: Record<string, unknown>) => ({
+export const strictObject = (properties: Record<string, unknown>) => ({
   type: "object",
   additionalProperties: false,
   required: Object.keys(properties),
   properties,
 });
-const enumOf = (values: readonly string[]) => ({ type: "string", enum: values });
-const strings = { type: "array", items: { type: "string" } };
-const zEnum = <T extends readonly [string, ...string[]]>(values: T) => z.enum(values);
+export const enumOf = (values: readonly string[]) => ({ type: "string", enum: values });
+export const strings = { type: "array", items: { type: "string" } };
+export const zEnum = <T extends readonly [string, ...string[]]>(values: T) => z.enum(values);
 
 const judgementSchema = strictObject({ status: enumOf(BEHAVIOUR_STATUSES), reason: { type: "string" } });
 const judgementParse = z.object({ status: zEnum(BEHAVIOUR_STATUSES), reason: z.string() });

@@ -151,6 +151,7 @@ export const NOT_ANALYSED: Record<NotAnalysedReason, string> = {
   time_limit: "hann inte analyseras – kör igen för att fortsätta",
   no_stored_analysis:
     "utan sparad AI-analys (inkorgen är inte analyserad för perioden)",
+  needs_pending: "leads där kundbehoven återstår att analysera – kör igen för att fortsätta",
 };
 
 export type Origin = "fact" | "stored" | "classification" | "ai";

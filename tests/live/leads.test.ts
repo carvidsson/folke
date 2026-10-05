@@ -7,6 +7,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import type { DialogueNeeds } from "@/lib/leads/needs";
 import type { LeadRow } from "@/lib/leads/types";
 import { leadStore, listLeadInboxes, listLeadRows, myLeadAccess } from "@/server/data/leads";
 import type { RawClassification } from "@/server/leads/analysis";
@@ -130,6 +131,7 @@ describe.skipIf(!isDevelopmentProject)("lead analysis store and access (live, de
     const svc = service();
     await svc.from("lead_analysis_runs").delete().in("hubspot_inbox_id", [INBOX_A, INBOX_B]);
     await svc.from("lead_analysis_runs").delete().in("region_id", [regionA, regionB]);
+    await svc.from("lead_dialogue_needs").delete().in("hubspot_thread_id", [THREAD_A, THREAD_B]);
     await svc.from("lead_dialogue_analyses").delete().in("hubspot_thread_id", [THREAD_A, THREAD_B]);
     await svc.from("lead_threads").delete().in("hubspot_inbox_id", [INBOX_A, INBOX_B]);
     await svc.from("lead_syncs").delete().in("hubspot_inbox_id", [INBOX_A, INBOX_B]);
@@ -192,6 +194,34 @@ describe.skipIf(!isDevelopmentProject)("lead analysis store and access (live, de
     expect(await store.saveRun({ ...base, scopeType: "region", inboxId: null, regionId: regionA })).toMatch(/^[0-9a-f-]{36}$/);
     await expect(store.saveRun({ ...base, scopeType: "region", inboxId: null, regionId: regionB })).rejects.toThrow();
     await expect(store.saveRun({ ...base, scopeType: "all", inboxId: null, regionId: null })).rejects.toThrow();
+  });
+
+  it("customer needs (20261016090000): stored once per thread and method, own region only, nothing for users without access", async () => {
+    const needs: DialogueNeeds = {
+      purpose: "purchase",
+      needs: [{ code: "trade_in", stance: "expressed", source: "customer_message", message: 1, note: "Vill byta in sin bil" }],
+      signals: [],
+      requests: [{ code: "send_offer", source: "customer_message", message: 1, note: "Ber om offert" }],
+      timeframe: "none",
+      unavailable: { situation: "none", carried: "not_applicable", note: "" },
+      sellerTopics: [],
+      evidence: "sufficient",
+      ai: true,
+    };
+    const store = leadStore(regionUser.client);
+    await store.saveNeeds([{ threadId: THREAD_A, fingerprint: "a".repeat(64), sourceLatestMessageAt: "2026-09-02T09:00:00.000Z", needs }], "lead-needs-live", "gpt-6-luna");
+    await store.saveNeeds([{ threadId: THREAD_A, fingerprint: "b".repeat(64), sourceLatestMessageAt: "2026-09-02T09:00:00.000Z", needs }], "lead-needs-live", "gpt-6-luna");
+    const loaded = await store.loadNeeds([THREAD_A, THREAD_B], "lead-needs-live", "gpt-6-luna");
+    expect(loaded.size).toBe(1);
+    expect(loaded.get(THREAD_A)).toMatchObject({ fingerprint: "b".repeat(64), needs });
+    await expect(store.saveNeeds([{ threadId: THREAD_B, fingerprint: "a".repeat(64), sourceLatestMessageAt: null, needs }], "lead-needs-live", "gpt-6-luna")).rejects.toThrow();
+    await leadStore(admin.client).saveNeeds([{ threadId: THREAD_B, fingerprint: "c".repeat(64), sourceLatestMessageAt: null, needs }], "lead-needs-live", "gpt-6-luna");
+    expect((await regionUser.client.from("lead_dialogue_needs").select("hubspot_thread_id").eq("hubspot_thread_id", THREAD_B)).data).toEqual([]);
+    expect((await allUser.client.from("lead_dialogue_needs").select("hubspot_thread_id").eq("needs_version", "lead-needs-live")).data?.length).toBe(2);
+    expect((await noAccess.client.from("lead_dialogue_needs").select("*").limit(5)).data ?? []).toEqual([]);
+    // No user deletes analyses.
+    await regionUser.client.from("lead_dialogue_needs").delete().eq("hubspot_thread_id", THREAD_A);
+    expect((await store.loadNeeds([THREAD_A], "lead-needs-live", "gpt-6-luna")).size).toBe(1);
   });
 
   it("explicitly: a region-A user cannot read region B's lead, analysis or sync through the API (20261013090000)", async () => {

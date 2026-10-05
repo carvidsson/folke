@@ -14,6 +14,7 @@ import { createSupabaseServerClient } from "@/server/supabase/server";
 import { requireLeadAccess } from "./access";
 import { stockholmTime } from "./business-hours";
 import { HubSpotError, hubSpotConfigured } from "./hubspot";
+import { NEEDS_FILTER } from "./needs-stats";
 import { evidence, resolveScope, RESPONSE_BUCKETS } from "./overview";
 import { effectiveJob, runInboxAnalysisJob } from "./jobs";
 import { ANALYSIS_VERSION } from "./analysis";
@@ -227,6 +228,8 @@ const evidenceFilter = z.union([
   oneOf("bucket", RESPONSE_BUCKETS.map((b) => b.id)),
   // A source name as stored (any text, bounded); it is only compared, never used in a query.
   z.string().regex(/^source:.{1,80}$/),
+  // lead-needs-1 (ADR-052): needs, requests, signals, combinations and the unavailable car.
+  z.string().regex(NEEDS_FILTER),
 ]);
 
 /** The leads behind an insight or a finding: structured reasons and HubSpot links, no dialogue text. */

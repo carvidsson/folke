@@ -13,6 +13,7 @@ import type {
   RunSummaryInfo,
   SituationAssessment,
 } from "@/lib/leads/types";
+import type { DialogueNeeds } from "@/lib/leads/needs";
 import type { RawClassification } from "@/server/leads/analysis";
 import type { SyncRecord } from "@/server/leads/coverage";
 import { createSupabaseServerClient } from "@/server/supabase/server";
@@ -42,6 +43,21 @@ export interface NewAnalysis {
   sourceLatestMessageAt: string | null;
   situationState: string;
   classification: RawClassification;
+}
+
+/** lead-needs-1 (ADR-052): the stored labels for one dialogue. */
+export interface StoredNeeds {
+  fingerprint: string;
+  sourceLatestMessageAt: string | null;
+  analysedAt: string;
+  needs: DialogueNeeds;
+}
+
+export interface NewNeeds {
+  threadId: string;
+  fingerprint: string;
+  sourceLatestMessageAt: string | null;
+  needs: DialogueNeeds;
 }
 
 export interface RunRecord {
@@ -85,6 +101,8 @@ export interface LeadStore {
   recordSync(sync: { inboxId: string; from: string; to: string; leads: number; complete: boolean }): Promise<void>;
   loadAnalyses(threadIds: string[], analysisVersion: string, model: string): Promise<Map<string, StoredAnalysis>>;
   saveAnalyses(rows: NewAnalysis[], analysisVersion: string, model: string): Promise<void>;
+  loadNeeds(threadIds: string[], needsVersion: string, model: string): Promise<Map<string, StoredNeeds>>;
+  saveNeeds(rows: NewNeeds[], needsVersion: string, model: string): Promise<void>;
   saveRun(run: RunRecord): Promise<string | null>;
   leadRows(inboxIds: string[], from: Date, to: Date): Promise<LeadRow[]>;
   sellerNames(ids: string[]): Promise<Map<string, string>>;
@@ -385,6 +403,36 @@ export function leadStore(given?: SupabaseClient): LeadStore {
       }
     },
 
+    loadNeeds: (threadIds, needsVersion, model) => loadNeeds(threadIds, needsVersion, model, given),
+
+    async saveNeeds(rows, needsVersion, model) {
+      if (!rows.length) return;
+      const supabase = await client(given);
+      const now = new Date().toISOString();
+      for (const part of chunks(rows)) {
+        unwrap(
+          await supabase.from("lead_dialogue_needs").upsert(
+            part.map((r) => {
+              const { purpose, evidence, ai, ...result } = r.needs;
+              return {
+                hubspot_thread_id: r.threadId,
+                needs_version: needsVersion,
+                model,
+                source_fingerprint: r.fingerprint,
+                source_latest_message_at: r.sourceLatestMessageAt,
+                analysed_at: now,
+                purpose,
+                evidence,
+                ai,
+                result,
+              };
+            }),
+            { onConflict: "hubspot_thread_id,needs_version,model" },
+          ),
+        );
+      }
+    },
+
     async saveRun(run) {
       const supabase = await client(given);
       const created = unwrap(
@@ -421,6 +469,47 @@ export function leadStore(given?: SupabaseClient): LeadStore {
 // ---------------------------------------------------------------------------
 // Reading for the pages (user session, RLS)
 // ---------------------------------------------------------------------------
+
+type NeedsRow = {
+  hubspot_thread_id: string;
+  source_fingerprint: string;
+  source_latest_message_at: string | null;
+  analysed_at: string;
+  purpose: DialogueNeeds["purpose"];
+  evidence: DialogueNeeds["evidence"];
+  ai: boolean;
+  result: Omit<DialogueNeeds, "purpose" | "evidence" | "ai">;
+};
+
+/** Stored lead-needs-1 labels for these threads (user session: RLS decides which are visible). */
+export async function loadNeeds(threadIds: string[], needsVersion: string, model: string, given?: SupabaseClient): Promise<Map<string, StoredNeeds>> {
+  const supabase = await client(given);
+  const out = new Map<string, StoredNeeds>();
+  const parts = await Promise.all(
+    chunks(threadIds).map(async (part) =>
+      unwrap(
+        await supabase
+          .from("lead_dialogue_needs")
+          .select("hubspot_thread_id, source_fingerprint, source_latest_message_at, analysed_at, purpose, evidence, ai, result")
+          .eq("needs_version", needsVersion)
+          .eq("model", model)
+          .in("hubspot_thread_id", part)
+          .returns<NeedsRow[]>(),
+      ),
+    ),
+  );
+  for (const rows of parts) {
+    for (const r of rows) {
+      out.set(r.hubspot_thread_id, {
+        fingerprint: r.source_fingerprint,
+        sourceLatestMessageAt: r.source_latest_message_at ? new Date(r.source_latest_message_at).toISOString() : null,
+        analysedAt: r.analysed_at,
+        needs: { ...r.result, purpose: r.purpose, evidence: r.evidence, ai: r.ai },
+      });
+    }
+  }
+  return out;
+}
 
 export async function myLeadAccess(given?: SupabaseClient): Promise<LeadAccessInfo> {
   const supabase = await client(given);

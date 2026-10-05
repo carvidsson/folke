@@ -154,6 +154,7 @@ export async function handleLeadChat({
     coverage: loaded.input.coverage,
     rows: loaded.input.rows,
     analyses: needsAnalyses(modulesFor(turn.intents, !!loaded.input.seller)) && !(turn.intents.includes("response_time") && turn.intents.includes("examples")) ? loaded.input.analyses : null,
+    needs: loaded.input.needs ?? null,
     sellerId: loaded.input.seller?.id ?? null,
     intents: turn.intents,
     period: loaded.input.period,

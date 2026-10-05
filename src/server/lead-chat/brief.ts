@@ -14,7 +14,7 @@ import {
   type Period,
   type StrengthType,
 } from "@/lib/leads/types";
-import type { StoredAnalysis } from "@/server/data/leads";
+import type { StoredAnalysis, StoredNeeds } from "@/server/data/leads";
 import { stockholmTime } from "@/server/leads/business-hours";
 import { buildInsights, leadMetrics, matches, RESPONSE_BUCKETS, responseBucket, sourceRows, threadUrl, UNKNOWN_SOURCE } from "@/server/leads/overview";
 import { median } from "@/server/leads/stats";
@@ -22,6 +22,7 @@ import { median } from "@/server/leads/stats";
 import { currentFacts, earlierFactsSection } from "./facts";
 import type { ExampleRequest } from "./intent";
 import { formatMinutes, MetricRegistry, POPULATIONS, renderMetric, type Metric } from "./metrics";
+import { NEEDS_MENTIONS, needsModule } from "./needs-brief";
 import { aliasSellerTokens, neutralizeStoredAliases, type Pseudonyms } from "./pseudonyms";
 
 /**
@@ -32,7 +33,7 @@ import { aliasSellerTokens, neutralizeStoredAliases, type Pseudonyms } from "./p
  * included. The same input always gives the same brief.
  */
 
-export type ModuleId = "header" | "keyFigures" | "responseTimes" | "sources" | "virtual" | "comparison" | "seller" | "observations" | "patterns" | "examples";
+export type ModuleId = "header" | "keyFigures" | "responseTimes" | "sources" | "virtual" | "comparison" | "seller" | "observations" | "patterns" | "examples" | "needs";
 
 /** Below this many leads a group's median is marked as a small sample (as on the Leadanalys page). */
 const SMALL_GROUP = 10;
@@ -71,6 +72,9 @@ export function modulesFor(intents: LeadIntent[], seller: boolean): Set<ModuleId
       case "explain":
         m.add("observations").add("patterns");
         break;
+      case "needs":
+        m.add("needs");
+        break;
     }
   }
   if (seller) m.add("seller");
@@ -78,7 +82,8 @@ export function modulesFor(intents: LeadIntent[], seller: boolean): Set<ModuleId
 }
 
 export function needsAnalyses(modules: Set<ModuleId>) {
-  return modules.has("observations") || modules.has("patterns") || modules.has("examples");
+  // The needs module uses the lead analysis too: whether a next step is visible after a purchase signal.
+  return modules.has("observations") || modules.has("patterns") || modules.has("examples") || modules.has("needs");
 }
 
 export const STRENGTH_LABELS: Record<StrengthType, string> = {
@@ -145,6 +150,8 @@ export interface BriefInput {
   prevCoverage: CoverageInfo | null;
   /** Null when no module needs the AI classifications. */
   analyses: Map<string, StoredAnalysis> | null;
+  /** lead-needs-1 (ADR-052): stored needs for the selection's leads; null when not needed or not readable. */
+  needs?: Map<string, StoredNeeds> | null;
   analysisVersion: string;
   /** Facts earlier answers in the conversation used (names, not aliases), still visible to the user. */
   earlierFacts?: VerifiedFact[];
@@ -569,7 +576,34 @@ export function buildBrief(input: BriefInput): Brief {
     sections.push(`## Mönster i de AI-analyserade dialogerna\n${lines.join("\n")}`);
   }
 
-  if (modules.has("examples") && analyses && !(input.intents.includes("response_time") && modules.has("responseTimes"))) {
+  // --- Customer needs (lead-needs-1) ------------------------------------------------
+  const needsExamples = modules.has("needs") && (input.state.needsFocus?.length ?? 0) > 0;
+  if (modules.has("needs")) {
+    if (!input.needs) {
+      sections.push("## Vad kunderna frågar efter\n- Kundbehoven kunde inte läsas för urvalet. Säg det och svara inte om kundbehov.");
+    } else {
+      const m = needsModule({
+        rows,
+        sellerRows,
+        sellerAlias,
+        scopeType: input.scopeType,
+        inboxes,
+        needs: input.needs,
+        analyses,
+        focus: input.state.needsFocus ?? [],
+        examples: modules.has("examples") ? { count: input.examples?.count ?? 3 } : null,
+        reg,
+        addLead: (row, types, reason, label) => addLead(row, "improve", types, reason, label),
+        leadTag,
+      });
+      sections.push(m.text);
+      for (const set of m.sets) {
+        sets.push({ kind: "lead_set", id: set.id, title: set.title, count: set.threadIds.length, threadIds: set.threadIds, scope: scopeForSets, types: [], quote: set.quote, mention: NEEDS_MENTIONS[set.id] ?? null });
+      }
+    }
+  }
+
+  if (modules.has("examples") && analyses && !needsExamples && !(input.intents.includes("response_time") && modules.has("responseTimes"))) {
     const req = input.examples ?? { polarity: "both" as const, count: 3 };
     const candidates: Candidate[] = analysedRows.flatMap((row): Candidate[] => {
       const a = analyses.get(row.threadId)!;
@@ -677,6 +711,12 @@ export function buildBrief(input: BriefInput): Brief {
       : `Perioden är inte hämtad i sin helhet: ${cov.completeInboxes} av ${cov.inboxes} inkorgar har hela perioden.`,
     `${rows.length} leads i urvalet${seller ? `, varav ${firstRows!.length} där ${seller.name} gav det första registrerade säljsvaret` : ""}.`,
     ...(analyses ? [`${analysedRows.length} AI-analyserade dialoger (${input.analysisVersion}) av ${eligibleCount} möjliga.`] : []),
+    ...(modules.has("needs") && input.needs
+      ? (() => {
+          const cands = (sellerRows ?? rows).filter((r) => r.customerMessages > 0);
+          return [`Behovsanalys (lead-needs-1) för ${cands.filter((r) => input.needs!.has(r.threadId)).length} av ${cands.length} leads med meddelande från kunden.`];
+        })()
+      : []),
     ...(modules.has("comparison") && input.previous
       ? [input.prevCoverage?.complete ? `Jämförelse med ${periodLabel(input.previous.from, input.previous.to)}.` : `Föregående period (${periodLabel(input.previous.from, input.previous.to)}) är inte hämtad – ingen jämförelse.`]
       : []),

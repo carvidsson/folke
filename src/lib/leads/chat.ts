@@ -8,7 +8,7 @@ import { z } from "zod";
  * on every turn: they never grant or widen access.
  */
 
-export const LEAD_INTENTS = ["overview", "response_time", "source", "virtual", "comparison", "patterns", "examples", "meeting", "explain"] as const;
+export const LEAD_INTENTS = ["overview", "response_time", "source", "virtual", "comparison", "patterns", "examples", "meeting", "explain", "needs"] as const;
 export type LeadIntent = (typeof LEAD_INTENTS)[number];
 
 const id = z.string().regex(/^[0-9a-f-]{36}$/);
@@ -40,5 +40,7 @@ export const leadChatStateSchema = z.object({
   comparison: z.boolean(),
   /** Opportunity or strength types the previous answer was built on ("samma typ av problem"). */
   focus: z.array(z.string().regex(/^[a-z_]{2,40}$/)).max(8),
+  /** lead-needs-1 (ADR-052): what a needs question was about ("need:trade_in", "unavailable" …), for follow-ups. */
+  needsFocus: z.array(z.string().regex(/^[a-z_]{2,24}(:[a-z_]{2,24})?$/)).max(8).optional(),
 });
 export type LeadChatState = z.infer<typeof leadChatStateSchema>;

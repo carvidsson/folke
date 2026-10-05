@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { LeadChatContext } from "@/lib/leads/chat";
 import { periodLabel, PRESET_LABELS } from "@/lib/leads/periods";
 import type { CoverageInfo, Insight, LeadMetrics, LeadOverview, LeadRow, SellerFacts, SellerPattern } from "@/lib/leads/types";
 import { cn } from "@/lib/utils";
@@ -18,6 +19,7 @@ import { syncLeadsAction } from "@/server/leads/actions";
 
 import { AskFolkeMenu, useAskFolke } from "./ask-folke";
 import { BarList, DistributionBars, DonutWithList } from "./charts";
+import { CustomerNeeds } from "./customer-needs";
 import { EvidenceSheet, type EvidenceRequest } from "./evidence-sheet";
 import { LeadAI, type AIStateView } from "./lead-ai";
 import { SellerCoaching } from "./seller-coaching";
@@ -63,6 +65,7 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
   const scopeParams = { regionId: scope.type === "region" ? scope.regionId : null, inboxId: scope.inboxId };
   const actionScope = { ...scopeParams, preset: period.preset, from: period.from, to: period.to };
   const [evidence, setEvidence] = useState<EvidenceRequest | null>(null);
+  const ask = useAskFolke(askFolke);
   const [custom, setCustom] = useState({ from: period.from, to: period.to });
   // Until most dialogues are AI-analysed, the HubSpot facts lead the page and the observations come later.
   const observationsFirst = overview.ai.eligible > 0 && overview.ai.analysed / overview.ai.eligible >= 0.5;
@@ -140,6 +143,7 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
           { id: "oversikt", label: "Översikt" },
           ...(observationsFirst ? [{ id: "observationer", label: "Observationer" }] : []),
           { id: overview.rows.length ? "leads" : "kallor", label: "Leads" },
+          ...(overview.needs && overview.needs.candidates > 0 ? [{ id: "kundbehov", label: "Kundbehov" }] : []),
           { id: "svarstider", label: "Svarstider" },
           { id: "bilar", label: "Bilar" },
           ...(!observationsFirst ? [{ id: "observationer", label: "Observationer" }] : []),
@@ -242,6 +246,8 @@ export function LeadAnalysis({ overview, detail, ai, aiEnabled, canSummariseAll,
           )}
         </Panel>
       </Section>
+
+      <CustomerNeeds needs={overview.needs} onEvidence={setEvidence} onAsk={ask ? (q) => ask(q, actionScope as LeadChatContext) : null} />
 
       <ResponseTimes overview={overview} onEvidence={setEvidence} />
 

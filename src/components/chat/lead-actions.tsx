@@ -127,7 +127,7 @@ export function LeadActions({ action }: { action: LeadActionReference }) {
         return;
       }
       analysed += final.result?.run.dialoguesAnalysed ?? 0;
-      left += (final.result?.notAnalysed ?? []).filter((x) => x.reason === "limit" || x.reason === "time_limit").reduce((sum, x) => sum + x.count, 0);
+      left += (final.result?.notAnalysed ?? []).filter((x) => x.reason === "limit" || x.reason === "time_limit" || x.reason === "needs_pending").reduce((sum, x) => sum + x.count, 0);
     }
     set(i, {
       status: left ? "idle" : "done",
