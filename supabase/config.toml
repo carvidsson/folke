@@ -230,7 +230,9 @@ max_frequency = "1s"
 # Number of characters used in the email OTP.
 otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
-otp_expiry = 3600
+# Folke: invitation e-mails say the link is valid for 24 hours – set the same in both hosted projects
+# (Authentication → Sign In / Providers → Email → Email OTP Expiration = 86400).
+otp_expiry = 86400
 
 # Folke: links go to /auth/confirm with token_hash (server-side verification).
 [auth.email.template.invite]

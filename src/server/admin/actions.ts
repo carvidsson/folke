@@ -6,8 +6,8 @@ import { z } from "zod";
 import { roleHas } from "@/lib/domain/roles";
 import { logSecurityEvent } from "@/server/audit";
 import { cleanUpAttachmentFiles } from "@/server/attachments/cleanup";
+import { authUserIdByEmail, recreateInvitation, sendInvitation, unusedInvitation, type InviteFailure, type InviteResult } from "@/server/admin/invitations";
 import { getSession } from "@/server/auth/session";
-import { serverEnv } from "@/server/env";
 import { createSupabaseAdminClient } from "@/server/supabase/admin";
 import { createSupabaseServerClient } from "@/server/supabase/server";
 
@@ -59,66 +59,127 @@ const inviteSchema = z.object({
   offerOnboarding: z.boolean().default(true),
 });
 
+type InvitationProfile = { id: string; email: string; full_name: string; status: string; role: string; invited_by: string | null; onboarding_offered: boolean; mfa_enrolled_at: string | null; last_active_at: string | null };
+const INVITATION_PROFILE = "id, email, full_name, status, role, invited_by, onboarding_offered, mfa_enrolled_at, last_active_at";
+
+/** Escapes % and _ so that an e-mail address matches itself only (case-insensitively). */
+function exactly(email: string) {
+  return email.replace(/[\\%_]/g, "\\$&");
+}
+
+/** Role, inviter, name, onboarding and groups on an (invited) profile – by the admin's own session (audited). */
+async function applyInvitation(
+  userId: string,
+  values: { role: string; invitedBy: string | null; fullName: string; offerOnboarding: boolean; groupIds: string[] },
+): Promise<ActionResult | null> {
+  const supabase = await createSupabaseServerClient();
+  const { error: profileError } = await supabase
+    .from("profiles")
+    .update({ role: values.role, invited_by: values.invitedBy, full_name: values.fullName, onboarding_offered: values.offerOnboarding })
+    .eq("id", userId);
+  if (profileError) return fail(profileError, "Användaren bjöds in men rollen kunde inte sättas.");
+  // The groups chosen now replace any earlier ones (a re-invitation keeps one membership per group).
+  const { error: clearError } = await supabase.from("group_members").delete().eq("user_id", userId);
+  if (clearError) return fail(clearError, "Användaren bjöds in men grupperna kunde inte sättas.");
+  if (values.groupIds.length) {
+    const { error: groupError } = await supabase.from("group_members").insert(values.groupIds.map((group_id) => ({ group_id, user_id: userId })));
+    if (groupError) return fail(groupError, "Användaren bjöds in men grupperna kunde inte sättas.");
+  }
+  return null;
+}
+
+const INVITE_FAILED: Record<InviteFailure, string> = {
+  email_exists: "Det finns redan en användare med den e-postadressen.",
+  rate_limited: "För många inbjudningsmejl har skickats den senaste tiden. Vänta en stund och försök igen.",
+  failed: "Inbjudan kunde inte skickas.",
+};
+
+/**
+ * Invites a new user. An address that only has an unused invitation (never signed in to Folke) is
+ * invited again – with a new link and a new validity – instead of being refused; an Auth account left
+ * without a profile (for example after a manual removal) is handled the same way. Users who have
+ * used Folke are never replaced.
+ */
 export async function inviteUserAction(input: z.input<typeof inviteSchema>): Promise<ActionResult> {
   const session = await requireSystemAdmin();
   const parsed = inviteSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Kontrollera namn, e-postadress och roll." };
   const { email, fullName, groupIds } = parsed.data;
 
-  const admin = createSupabaseAdminClient();
-  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-    data: { full_name: fullName },
-    redirectTo: `${serverEnv().NEXT_PUBLIC_SITE_URL}/auth/confirm`,
-  });
-  if (error || !data.user) {
-    return {
-      ok: false,
-      error: error?.code === "email_exists" ? "Det finns redan en användare med den e-postadressen." : "Inbjudan kunde inte skickas.",
-    };
-  }
-
-  // Role, inviter and groups are set by the admin's own session (audited).
   const supabase = await createSupabaseServerClient();
-  const { error: profileError } = await supabase
-    .from("profiles")
-    .update({
-      role: parsed.data.role,
-      invited_by: session.user.id,
-      full_name: fullName,
-      onboarding_offered: parsed.data.offerOnboarding,
-    })
-    .eq("id", data.user.id);
-  if (profileError) return fail(profileError, "Användaren bjöds in men rollen kunde inte sättas.");
+  const { data: existing } = await supabase.from("profiles").select(INVITATION_PROFILE).ilike("email", exactly(email)).maybeSingle<InvitationProfile>();
+  if (existing && !unusedInvitation(existing)) return { ok: false, error: INVITE_FAILED.email_exists };
 
-  if (groupIds.length) {
-    const { error: groupError } = await supabase
-      .from("group_members")
-      .insert(groupIds.map((group_id) => ({ group_id, user_id: data.user.id })));
-    if (groupError) return fail(groupError, "Användaren bjöds in men grupperna kunde inte sättas.");
+  let result: InviteResult | Awaited<ReturnType<typeof recreateInvitation>> = await sendInvitation(email, fullName);
+  let recreated = false;
+  if (!result.ok && result.code === "email_exists") {
+    // The link was used (by the person or an e-mail scanner) but the account never was: invite anew.
+    const stale = existing?.id ?? (await authUserIdByEmail(email));
+    if (stale) {
+      result = await recreateInvitation(stale, email, fullName);
+      recreated = result.ok || "pendingUserId" in result;
+    }
+  }
+  // An account recreated without an e-mail still gets its role and groups (nothing is lost).
+  const target = result.ok ? result.userId : "pendingUserId" in result ? result.pendingUserId : null;
+  if (target) {
+    const applied = await applyInvitation(target, { role: parsed.data.role, invitedBy: session.user.id, fullName, offerOnboarding: parsed.data.offerOnboarding, groupIds });
+    if (applied) return applied;
+  }
+  if (!result.ok) {
+    if (target) refreshAdmin();
+    return { ok: false, error: INVITE_FAILED[result.code] };
   }
 
-  await logSecurityEvent("admin.user_invited", {
+  await logSecurityEvent(existing || recreated ? "admin.user_reinvited" : "admin.user_invited", {
     actorId: session.user.id,
     targetType: "profiles",
-    targetId: data.user.id,
-    metadata: { role: parsed.data.role, groups: groupIds.length, onboarding: parsed.data.offerOnboarding },
+    targetId: result.userId,
+    metadata: { role: parsed.data.role, groups: groupIds.length, onboarding: parsed.data.offerOnboarding, recreated },
   });
   refreshAdmin();
   return { ok: true, message: `En inbjudan har skickats till ${email}.` };
 }
 
+/**
+ * Sends a new invitation to a user who has not started using Folke: a new link and a new validity;
+ * the earlier link stops working. Also works when the earlier link was already used (for example by an
+ * e-mail scanner), without removing anything by hand – role, inviter and groups are kept.
+ */
 export async function resendInviteAction(userId: string): Promise<ActionResult> {
-  await requireSystemAdmin();
+  const session = await requireSystemAdmin();
   if (!uuid.safeParse(userId).success) return { ok: false, error: "Ogiltig användare." };
   const supabase = await createSupabaseServerClient();
-  const { data: profile } = await supabase.from("profiles").select("email, status").eq("id", userId).maybeSingle();
-  if (!profile || profile.status !== "invited") return { ok: false, error: "Användaren är inte inbjuden." };
+  const { data: profile } = await supabase.from("profiles").select(INVITATION_PROFILE).eq("id", userId).maybeSingle<InvitationProfile>();
+  if (!profile || !unusedInvitation(profile)) return { ok: false, error: "Användaren är inte inbjuden eller har redan börjat använda Folke." };
 
-  const { error } = await createSupabaseAdminClient().auth.admin.inviteUserByEmail(profile.email, {
-    redirectTo: `${serverEnv().NEXT_PUBLIC_SITE_URL}/auth/confirm`,
-  });
-  if (error) return { ok: false, error: "Inbjudan kunde inte skickas igen." };
-  return { ok: true, message: "Inbjudan har skickats igen." };
+  let result: InviteResult | Awaited<ReturnType<typeof recreateInvitation>> = await sendInvitation(profile.email, null);
+  let recreated = false;
+  if (!result.ok && result.code === "email_exists") {
+    const { data: groups } = await supabase.from("group_members").select("group_id").eq("user_id", userId).returns<{ group_id: string }[]>();
+    result = await recreateInvitation(userId, profile.email, profile.full_name);
+    // The new account – also one recreated without an e-mail – keeps role, inviter and groups.
+    const target = result.ok ? result.userId : "pendingUserId" in result ? result.pendingUserId : null;
+    if (target) {
+      recreated = true;
+      const applied = await applyInvitation(target, {
+        role: profile.role,
+        invitedBy: profile.invited_by,
+        fullName: profile.full_name,
+        offerOnboarding: profile.onboarding_offered,
+        groupIds: (groups ?? []).map((g) => g.group_id),
+      });
+      if (applied) return applied;
+    }
+  }
+  if (!result.ok) {
+    if (recreated) refreshAdmin();
+    return { ok: false, error: result.code === "rate_limited" ? INVITE_FAILED.rate_limited : "Inbjudan kunde inte skickas igen." };
+  }
+
+  await logSecurityEvent("admin.user_reinvited", { actorId: session.user.id, targetType: "profiles", targetId: result.userId, metadata: { recreated } });
+  refreshAdmin();
+  return { ok: true, message: "En ny inbjudan har skickats. Den tidigare länken gäller inte längre." };
 }
 
 export async function setUserRoleAction(userId: string, newRole: string): Promise<ActionResult> {

@@ -1,26 +1,24 @@
-import type { EmailOtpType } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 
-import { createSupabaseServerClient } from "@/server/supabase/server";
+import { emailLinkSchema } from "@/lib/auth/email-link";
 
 /**
- * Landing point for links in invitation and password-reset e-mails.
- * The e-mail templates must link here with `token_hash` and `type`
- * (see docs/SETUP.md). Verifying the token creates a password-only (aal1)
- * session, after which the user chooses a password and completes TOTP.
+ * Landing point for links in invitation and password-reset e-mails (the templates link here with
+ * `token_hash` and `type`, see docs/SETUP.md).
+ *
+ * A GET never verifies the token. E-mail security scanners (Safe Links and the like) open every link in
+ * an e-mail within seconds; verifying here let them use up the one-time link before the person clicked
+ * it (verified in beta 2026-10-05). The link only leads to /login/confirm, where the person continues
+ * with a button – the token is verified by that POST (a server action).
  */
-const ALLOWED_TYPES: EmailOtpType[] = ["invite", "recovery"];
-
 export async function GET(request: NextRequest) {
-  const tokenHash = request.nextUrl.searchParams.get("token_hash");
-  const type = request.nextUrl.searchParams.get("type") as EmailOtpType | null;
-
-  if (tokenHash && type && ALLOWED_TYPES.includes(type)) {
-    const supabase = await createSupabaseServerClient();
-    const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
-    if (!error) {
-      return NextResponse.redirect(new URL("/login/set-password", request.url));
-    }
-  }
-  return NextResponse.redirect(new URL("/login?error=link", request.url));
+  const parsed = emailLinkSchema.safeParse({
+    token_hash: request.nextUrl.searchParams.get("token_hash"),
+    type: request.nextUrl.searchParams.get("type"),
+  });
+  if (!parsed.success) return NextResponse.redirect(new URL("/login?error=link", request.url));
+  const to = new URL("/login/confirm", request.url);
+  to.searchParams.set("token_hash", parsed.data.token_hash);
+  to.searchParams.set("type", parsed.data.type);
+  return NextResponse.redirect(to, { status: 303 });
 }

@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
+import { emailLinkSchema } from "@/lib/auth/email-link";
 import { passwordProblems } from "@/lib/auth/password-policy";
 import { logSecurityEvent } from "@/server/audit";
 import { ACTIVATION_REDIRECTS, activateCurrentUserIfInvited } from "@/server/auth/activation";
@@ -158,4 +159,22 @@ export async function requestPasswordResetAction(_: FormState, formData: FormDat
 
   // Same answer whether or not the address exists.
   return { message: "Om adressen finns i Folke har vi skickat en länk för att välja nytt lösenord." };
+}
+
+// ---------------------------------------------------------------------------
+// Invitation and password-reset links
+// ---------------------------------------------------------------------------
+
+/**
+ * Verifies the one-time link from an invitation or a password reset – only when the person clicks
+ * "Fortsätt" on /login/confirm (a POST with the server action's origin check). Opening the link (a GET,
+ * as e-mail scanners do) never uses it up. A used or expired link is refused by Supabase Auth.
+ */
+export async function confirmEmailLinkAction(formData: FormData): Promise<void> {
+  const parsed = emailLinkSchema.safeParse({ token_hash: formData.get("token_hash"), type: formData.get("type") });
+  if (!parsed.success) redirect("/login?error=link");
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.auth.verifyOtp({ type: parsed.data.type, token_hash: parsed.data.token_hash });
+  if (error) redirect("/login?error=link");
+  redirect("/login/set-password");
 }

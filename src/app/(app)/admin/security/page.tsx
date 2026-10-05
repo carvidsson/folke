@@ -37,6 +37,7 @@ const ACTION_LABELS: Record<string, [string, StatusTone]> = {
   "auth.activated": ["Konto aktiverat", "success"],
   "access.denied": ["Åtkomst nekad", "danger"],
   "admin.user_invited": ["Användare inbjuden", "info"],
+  "admin.user_reinvited": ["Ny inbjudan skickad", "info"],
   "document.uploaded": ["Dokument uppladdat", "info"],
   "document.processed": ["Dokument bearbetat", "neutral"],
   "document.downloaded": ["Dokument nedladdat", "neutral"],

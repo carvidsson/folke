@@ -24,6 +24,7 @@ export type SecurityEvent =
   | "auth.activated"
   | "access.denied"
   | "admin.user_invited"
+  | "admin.user_reinvited"
   | "document.uploaded"
   | "document.downloaded"
   | "document.processed"

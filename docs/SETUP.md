@@ -191,6 +191,7 @@ Skriptet är idempotent. En befintlig användare får rollen utan ny inbjudan oc
 | Lösenord | Resend-API-nyckel, lagrad **endast** i Supabase |
 | Avsändare | `no-reply@heyfolke.se`, namn `Folke` |
 
+- **Giltighetstid:** mejlet säger 24 timmar. Sätt **Email OTP Expiration = 86400** i båda projekten (Authentication → Sign In / Providers → Email). Supabases standard är 3600 (1 timme).
 - **Mallarna i Supabase-dashboarden gäller.** `supabase/templates/` är referensversioner för lokal utveckling. Länken måste behålla formatet `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite` (respektive `type=recovery`).
 - DNS-poster för Resend (SPF, DKIM, MX för retur) ligger hos Loopia. Ändra dem inte utan att verifiera domänen igen i Resend.
 - Mottagaradress och namn behandlas av Resend i EU (Irland).
@@ -218,7 +219,9 @@ Skriptet är idempotent. En befintlig användare får rollen utan ny inbjudan oc
 |---|---|
 | `permission denied for table …` | Tabellbehörighet saknas. Lägg till `grant` i en ny migration (avsnitt 6). |
 | "Folke är inte konfigurerad" | `.env.local` saknas eller variabelnamn är fel. Starta om `npm run dev`. |
-| "Länken är ogiltig eller har gått ut" | Länken är använd eller för gammal, eller mallen saknar `token_hash`. Skicka en ny med `--resend` eller **Glömt lösenordet?**. |
+| "Länken är ogiltig eller har gått ut" | Länken är använd, för gammal eller ersatt av en nyare inbjudan, eller mallen saknar `token_hash`. Administratören väljer **Skicka inbjudan igen** (ny länk, ny giltighetstid, den gamla slutar gälla). Det fungerar även om länken redan har förbrukats och kräver ingen radering i Supabase. |
+| Inbjudningslänken är "ogiltig" direkt, fast den är ny | Före 2026-10-05: mejlskydd (till exempel Safe Links) öppnade länken och förbrukade den innan personen klickade. Nu förbrukar ett öppnat länk ingenting – personen klickar **Fortsätt** på `/login/confirm`. |
+| "För många inbjudningsmejl …" | Supabase Auths gräns för mejl per timme. Vänta, eller höj gränsen under Authentication → Rate Limits. |
 | Inloggad men tomma listor | Användaren saknar grupper eller assistentbehörigheter. |
 | "Koden stämmer inte" vid TOTP | Kontrollera att telefonens tid är automatisk. Skanna den senast visade QR-koden. |
 | Inget mejl kommer fram | Kontrollera Resend → Logs och Supabase → Auth Logs. |
