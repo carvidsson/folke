@@ -120,6 +120,20 @@ Begränsning: Supabase Auth, Storage och PostgREST körs inte i PGlite. Därför
 
 Testat: `tests/db/attachments.test.ts` (13), `tests/live/attachments.test.ts` (7, folke-dev), enhetstester (18) och ett webbläsartest (20 kontroller, bland annat 404 för en annan användare och radering i Storage).
 
+**Strukturerad Excel-analys (ADR-055, Scanias avtalsexporter i Analysassistenten):**
+
+| Skydd | Hur |
+|---|---|
+| Åtkomst | Bilagorna listas med användarens klient (RLS: bara ägaren). Först därefter laddar adminklienten ned originalet. Ingen ny tabell och ingen ny behörighet. Testat live: en annan användare, även systemadministratör, får ingenting och kan inte använda bilagans id. |
+| Ingen rådata till OpenAI | En igenkänd export får inga textbitar och inga embeddings. Textbitar från före ändringen tas bort när filen används. Andra assistenter får bara en neutral notis om att en strukturerad export finns, utan filnamn. Tidigare tabellsvar följer inte med i den vanliga chattens historik. |
+| Pseudonymisering | Modellen och planeraren får bara alias (Fordon, Kund, Avtal, Driftställe, Fil N), aggregat och högst 12 resultatrader, aldrig arbetsorder, radreferenser, kontaktpersoner eller fritext. Användarens frågor och historiken döljs med samma karta, och kontaktnamn blir "[namn]". En slutkontroll stoppar anropet om någon verklig identifierare finns kvar; då blir svaret serverns egen text. Verifierat på de fyra verkliga filerna: 25 underlag utan en enda identifierare eller fritext, och alla 79 identifierare döljs när de skrivs i en fråga. |
+| Spärrar | Extern AI bara när `assertExternalAllowed` godkänner bilagor (`FOLKE_AI_ATTACHMENTS`). Inga vägar runt dataspärren. |
+| Lagring och radering | Inget härlett lagras utom tabellen i svaret (`table_result` i ägarens meddelande, med riktiga värden och radnummer). Den raderas med konversationen. Att bara ta bort bilagan tar inte bort redan sparade svar, precis som för andra bilagor. Tolkade filer hålls i serverns minne i högst 30 minuter. |
+| Loggning | `[chat/tables]` innehåller bara antal, tider, analys och parametrar, aldrig frågor, värden, filnamn eller svar. Kontrollerat i webbläsartestet. |
+| Kvarstår | Uppladdningsnotisen säger fortfarande att kunduppgifter inte ska laddas upp. För Scania-exporter skickas inga kunduppgifter till OpenAI, men själva filen lagras i Folke. Notisens formulering och avtalsfrågorna ovan är produktägarens beslut. |
+
+Testat: enhetstester (20), `tests/live/tables.test.ts` (5, folke-dev) och ett webbläsartest (20 kontroller).
+
 **Leadanalys från HubSpot (experiment, ADR-046, ADR-047 och ADR-048):**
 
 | Skydd | Hur |

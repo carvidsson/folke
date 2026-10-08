@@ -779,6 +779,34 @@ Fel som rättades under valideringen:
 
 ---
 
+### ADR-055 – Strukturerad Excel-analys i Analysassistenten (V1: Scanias avtalsexporter)
+
+**Sammanhang:** Kostnadsexporter från Scanias service- och reparationsavtal (en flik "Kostnader", rubriker på rad 5, en summarad sist) blev oanvändbara som vanliga bilagor. Textutdraget hoppade över tomma celler så att värden flyttades mellan kolumner, datum blev serienummer och modellen såg bara cirka 4 % av raderna. Dessutom gick rådata – kundnamn, registreringsnummer, kontaktpersoner – till embeddings och till modellen.
+
+**Beslut:**
+- **En strukturerad läsare** (`src/server/tables/xlsx.ts`) behåller varje cell i sin kolumn, läser datum från cellformatet och behåller flik och ursprungligt radnummer.
+- **Schemaigenkänning** (`scania.ts`): en flik räknas som Scania-export bara när alla 26 obligatoriska rubriker står på samma rad. Annars gäller den vanliga bilagehanteringen oförändrat. Värden trimmas, `undefined` blir tomt, och summaraden (inget fordon, ingen arbetsorder eller avtal, bara total) räknas aldrig som transaktion utan kontrolleras mot raderna.
+- **Inga textbitar och inga embeddings** för en igenkänd export (`processing.ts`): den markeras `ready` med `content_mode = text` och `char_count = 0`. Textbitar från före ändringen tas bort första gången filen används i Analysassistenten. Andra assistenter får bara veta att en strukturerad export finns, utan innehåll eller filnamn.
+- **Ingen migration och inget lagrat härlett:** filen tolkas från originalet (RLS-läsning av bilagan, sedan nedladdning med adminklienten) och hålls i minnet per bilaga i 30 minuter. Befintliga raderingsregler gäller därför oförändrat.
+- **Fasta, deterministiska analyser** (`analyses.ts`):
+  - **Återkommande reparationer.** Ett tillfälle är en arbetsorder per fordon och huvud- och undergrupp; raderna summeras, datum är det tidigaste och mätarställningen den högsta. En återkomst är nästa tillfälle i samma grupp inom 3, 6, 12 eller 24 kalendermånader, i en annan arbetsorder. Planerat underhåll ingår inte om det inte efterfrågas. Kilometer visas bara när båda mätarställningarna finns och inte minskar. Resultatet kallas granskningskandidater.
+  - **Kostnader** per fordon, avtal, år, månad, verkstad, driftställe, huvudgrupp, huvud- och undergrupp eller kostnadsslag (arbete mot material). Kostnad per 1 000 km beräknas bara för fordon vars mätarställning aldrig minskar.
+  - **Enkel avtalsprognos:** linjär framskrivning av kostnad per påbörjad avtalsmånad, bara efter minst sex månader och före avtalets slut. Aldrig lönsamhet.
+  - **Datakvalitet**, och **reservdelsfrågor** som besvaras med att exporten saknar artikelnummer, med återkommande grupper som grov indikation och vilken export som behövs.
+- **Planerare som i ADR-054** (`planner.ts`): gpt-6-luna med strikt schema väljer analys och parametrar från en stängd lista. Den får det tidigare frågeläget, fordonsalias och gruppkatalogen, ingen rad. Servern validerar varje fält, och regelbaserad tolkning tar över om planeraren är avstängd, långsam eller fel. Frågeläget sparas med svarets tabell, så följdfrågor ändrar det. Frågor som inte gäller filerna går till den vanliga chatten.
+- **Pseudonymiserat underlag** (`pseudonyms.ts`, `brief.ts`):
+  - Registrerings- och chassinummer blir "Fordon N", kunder "Kund N", avtal "Avtal N", driftställen "Driftställe N" och filer "Fil N". Kontaktpersoner och fritext (Rep Orsak) skickas aldrig, och ett kontaktnamn i en fråga blir "[namn]".
+  - Modellen får serverns rader och högst 12 rader av resultatet, utan arbetsorder och radreferenser.
+  - En slutkontroll av hela anropet stoppar alla verkliga identifierare. Alias översätts tillbaka på servern, även under strömningen.
+- **Tabellen under svaret** (`table_result`) har riktiga värden och fil och radnummer, och sparas i ägarens meddelande. Hela tabellen skickas aldrig till modellen.
+- **Spärrar:** extern AI bara när `assertExternalAllowed` godkänner bilagor (`FOLKE_AI_ATTACHMENTS`). Annars blir svaret serverns egen text med tabellen.
+
+**Verifierat mot de fyra verkliga exporterna (lokalt, inget skickat):** 790 transaktionsrader, 302 arbetsordrar, 4 fordon och 4 summarader som stämmer exakt (1 751 796,57, 1 859 445,63, 2 188 850,63 och 440 317,09 kr). En oberoende beräkning från råceller ger identiska rader, 612 tillfällen och samma kandidater för alla 16 kombinationer av fönster, samma verkstad och underhåll.
+
+**Alternativ som valdes bort:** att låta modellen räkna på rader eller hela tabeller. Kodkörning eller fri SQL. En lagrad härledd tabell (kräver migration och egna raderingsregler). En egen Scania-assistent.
+
+---
+
 ## Öppna beslut
 
 

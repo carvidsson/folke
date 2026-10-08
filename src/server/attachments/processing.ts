@@ -9,6 +9,7 @@ import { recordEmbeddingUsage } from "@/server/ai/usage";
 import { chunkSections } from "@/server/documents/chunk";
 import { assertImageSignature, extractDocument, UnsupportedDocumentError, type ImageFileType } from "@/server/documents/extract";
 import { createSupabaseAdminClient } from "@/server/supabase/admin";
+import { parseScaniaExport } from "@/server/tables/scania";
 
 import { ATTACHMENT_BUCKET } from "./cleanup";
 
@@ -53,6 +54,14 @@ export async function processAttachment(row: AttachmentRow): Promise<ProcessResu
     if (row.kind === "image") {
       assertImageSignature(row.file_type as ImageFileType, bytes);
       await set({ status: "ready", content_mode: "image", size_bytes: file.size });
+      return { ok: true };
+    }
+
+    // A recognised structured export (ADR-055) is analysed from the original in Analysassistenten. Its
+    // raw rows are never chunked or embedded, so no text search can send them to a model.
+    if (row.file_type === "xlsx" && (await parseScaniaExport(bytes, "fil"))) {
+      await admin.from("conversation_attachment_chunks").delete().eq("attachment_id", row.id);
+      await set({ status: "ready", content_mode: "text", char_count: 0 });
       return { ok: true };
     }
 

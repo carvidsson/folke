@@ -54,6 +54,8 @@ export interface AttachmentPromptInput {
   excerpts: { name: string; location: string | null; content: string }[];
   /** Images and PDFs without a text layer, attached to the user's message itself. */
   files: { name: string; kind: "bild" | "pdf" }[];
+  /** Structured Excel exports (ADR-055): their content is not in this material. */
+  structured?: number;
 }
 
 /** Instruction layers, in order of precedence (ADR-037). */
@@ -110,7 +112,7 @@ export function buildSystemPrompt(
   }
   sections.push(`## Dagens datum\n${today}`);
   sections.push(`## Källor\n${sources}`);
-  if (attachments && (attachments.excerpts.length || attachments.files.length)) {
+  if (attachments && (attachments.excerpts.length || attachments.files.length || attachments.structured)) {
     const parts = [`## Användarens bilagor\n${ATTACHMENT_RULES.map((r) => `- ${r}`).join("\n")}`];
     for (const e of attachments.excerpts) {
       parts.push(
@@ -120,6 +122,11 @@ export function buildSystemPrompt(
     if (attachments.files.length) {
       parts.push(
         `Bifogat i användarens meddelande: ${attachments.files.map((f) => `${f.name} (${f.kind === "bild" ? "bild" : "PDF utan textlager"})`).join(", ")}.`,
+      );
+    }
+    if (attachments.structured) {
+      parts.push(
+        `${attachments.structured === 1 ? "En bifogad Excel-fil är en strukturerad export" : `${attachments.structured} bifogade Excel-filer är strukturerade exporter`} som bara räknas på i Analysassistenten. Innehållet finns inte i underlaget här; säg det om frågan gäller dem.`,
       );
     }
     sections.push(parts.join("\n\n"));

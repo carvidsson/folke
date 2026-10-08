@@ -35,6 +35,8 @@ import { getInstructionsForAuthorizedChat, getMyAssistant } from "@/server/data/
 import { getMyAIPreferences, getOrganizationInstructionsForChat } from "@/server/data/instructions";
 import { handleLeadChat } from "@/server/lead-chat/handler";
 import { createSupabaseServerClient } from "@/server/supabase/server";
+import { handleTableChat, TABLE_ASSISTANT_SLUG } from "@/server/tables/chat";
+import { loadTableDataset } from "@/server/tables/dataset";
 
 /**
  * POST /api/chat – stores the user's message, retrieves permitted document
@@ -144,6 +146,28 @@ export async function POST(request: Request) {
     if (error) {
       console.error("[api/chat] could not bind attachments", error.message);
       return jsonError("Bilagorna kunde inte kopplas till konversationen", 500);
+    }
+  }
+
+  // Structured Excel analysis (ADR-055): Analysassistenten with recognised exports in the conversation.
+  // Questions that are not about them fall through to the ordinary chat below, unchanged.
+  if (assistant.slug === TABLE_ASSISTANT_SLUG && attachmentsEnabled()) {
+    const dataset = await loadTableDataset(supabase, conversation.id);
+    if (dataset) {
+      const response = await handleTableChat({
+        request,
+        userId,
+        assistant,
+        conversation,
+        created,
+        userHasTestAccess,
+        assistantModel: assistantRow?.ai_model ?? null,
+        message: message.content,
+        storedAttachments: messageAttachments(attachmentRows),
+        dataset,
+        supabase,
+      });
+      if (response) return response;
     }
   }
 

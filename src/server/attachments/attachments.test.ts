@@ -111,6 +111,7 @@ describe("prompt and provider input", () => {
       excerpts: [],
       images: [],
       pdfs: [],
+      structured: 0,
       stats: { attachments: 2, active: 0, fullText: false, excerpts: 0, chars: 0, images: 0, pdfs: 0 },
     };
     expect(attachmentPrompt(empty)).toBeNull();

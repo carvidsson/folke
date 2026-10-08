@@ -1,4 +1,5 @@
 import type { LeadTurn } from "@/lib/leads/chat";
+import type { TableColumn, TableQuery, TableRow } from "@/lib/tables/query";
 
 /**
  * Core domain model for Folke.
@@ -271,8 +272,27 @@ export interface LeadPromptsReference {
   turns?: LeadTurn[];
 }
 
-/** Everything an assistant answer can show under it: document excerpts, or (Leadanalys) leads, lead sets, the basis, actions and suggested questions. */
-export type MessageSource = SourceReference | LeadSourceReference | LeadSetReference | LeadBasisReference | LeadActionReference | LeadPromptsReference;
+/**
+ * A table computed on the server from the user's own structured Excel attachments (ADR-055): what was
+ * computed, the rows with their original file and row numbers, and the query, so a follow-up can
+ * change it. Real values – shown only to the conversation's owner; the model got a pseudonymised brief.
+ */
+export interface TableResultReference {
+  kind: "table_result";
+  id: string;
+  title: string;
+  lines: string[];
+  columns: TableColumn[];
+  rows: TableRow[];
+  /** Rows in the full result (the stored rows may be fewer). */
+  total: number;
+  query: TableQuery;
+  /** Questions the user can ask next with one click. */
+  prompts?: string[];
+}
+
+/** Everything an assistant answer can show under it: document excerpts, (Leadanalys) leads, lead sets, the basis, actions and suggested questions, or a computed table. */
+export type MessageSource = SourceReference | LeadSourceReference | LeadSetReference | LeadBasisReference | LeadActionReference | LeadPromptsReference | TableResultReference;
 
 export function isDocumentSource(s: MessageSource): s is SourceReference {
   return s.kind === undefined || s.kind === "document";

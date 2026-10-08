@@ -160,6 +160,19 @@ Bakgrund och ursprunglig plan: [MVP-0.3-PLAN.md](MVP-0.3-PLAN.md).
 | Betan | Inte släppt – väntar på granskning. |
 | Senare | Fler frågetyper (bilar och märken, inflöde per veckodag), per säljare över tid och utvärdering mot fler formuleringar. |
 
+## Strukturerad Excel-analys V1 (ADR-055) – Scanias avtalsexporter i Analysassistenten
+
+| Del | Status |
+|---|---|
+| Strukturerad Excel-läsare (kolumner, datum, svenska tal, flik och radnummer) och igenkänning av Scania-exporten | ✅ |
+| Inga textbitar eller embeddings för igenkända exporter; andra Excel-filer oförändrade | ✅ |
+| Återkommande reparationer (3/6/12/24 mån, samma verkstad, underhåll), kostnader i nio dimensioner, km-kostnad med validerad mätarställning, enkel avtalsprognos, datakvalitet, reservdelsfrågan | ✅ |
+| Planerare med stängt schema, följdfrågor och regelbaserad reserv | ✅ |
+| Pseudonymiserat underlag, slutkontroll, tabell med fil och radnummer under svaret | ✅ |
+| Verifierat mot de fyra verkliga exporterna med oberoende beräkning | ✅ |
+| Ingen migration | ✅ |
+| Senare | Export på artikelnivå (reservdelar), fler format, delning i grupp. |
+
 ## Senare
 
 - **Versionshistorik:** bevara publicerarens namn även när användarkontot tas bort (i dag blir det "Folke"). Mindre förbättring som inte ska försena introduktionen.

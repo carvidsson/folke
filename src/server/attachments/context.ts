@@ -41,6 +41,7 @@ interface StoredAttachment {
   kind: "document" | "image";
   file_name: string;
   mime_type: string;
+  file_type: string;
   content_mode: "text" | "pdf_inline" | "image" | null;
   char_count: number | null;
   storage_path: string | null;
@@ -65,6 +66,8 @@ export interface AttachmentContext {
   excerpts: AttachmentExcerpt[];
   images: AttachmentFile[];
   pdfs: AttachmentFile[];
+  /** Structured Excel exports in the conversation (ADR-055): analysed only in Analysassistenten, never as text. */
+  structured: number;
   stats: { attachments: number; active: number; fullText: boolean; excerpts: number; chars: number; images: number; pdfs: number };
 }
 
@@ -72,6 +75,7 @@ export const EMPTY_ATTACHMENT_CONTEXT: AttachmentContext = {
   excerpts: [],
   images: [],
   pdfs: [],
+  structured: 0,
   stats: { attachments: 0, active: 0, fullText: false, excerpts: 0, chars: 0, images: 0, pdfs: 0 },
 };
 
@@ -117,7 +121,7 @@ export async function buildAttachmentContext(
   // RLS: only the owner's attachments of this conversation.
   const { data } = await supabase
     .from("conversation_attachments")
-    .select("id, kind, file_name, mime_type, content_mode, char_count, storage_path, created_at")
+    .select("id, kind, file_name, file_type, mime_type, content_mode, char_count, storage_path, created_at")
     .eq("conversation_id", input.conversationId)
     .eq("status", "ready")
     .order("created_at", { ascending: false });
@@ -205,6 +209,7 @@ export async function buildAttachmentContext(
     excerpts,
     images: keptImages,
     pdfs: keptPdfs,
+    structured: all.filter((a) => a.file_type === "xlsx" && a.content_mode === "text" && a.char_count === 0).length,
     stats: {
       attachments: all.length,
       active: active.length,
@@ -263,8 +268,9 @@ export async function checkAttachments(
 
 /** The prompt section for this turn, or null when no attachment is used. */
 export function attachmentPrompt(ctx: AttachmentContext): AttachmentPromptInput | null {
-  if (!ctx.excerpts.length && !ctx.images.length && !ctx.pdfs.length) return null;
+  if (!ctx.excerpts.length && !ctx.images.length && !ctx.pdfs.length && !ctx.structured) return null;
   return {
+    structured: ctx.structured,
     excerpts: ctx.excerpts.map(({ name, location, content }) => ({ name, location, content })),
     files: [
       ...ctx.images.map((f) => ({ name: f.name, kind: "bild" as const })),

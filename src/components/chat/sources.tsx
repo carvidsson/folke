@@ -9,6 +9,7 @@ import { OriginBadge } from "@/components/leads/parts";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useChatActions } from "./chat-actions";
 import { LeadActions } from "./lead-actions";
+import { TableResult } from "./table-result";
 import {
   isDocumentSource,
   type LeadActionReference,
@@ -18,6 +19,7 @@ import {
   type LeadSourceReference,
   type MessageSource,
   type SourceReference,
+  type TableResultReference,
 } from "@/lib/domain/types";
 
 /** Sets shown directly; the rest are one click away, so a long answer does not get a wall of buttons. */
@@ -48,6 +50,7 @@ export function Sources({ sources, idPrefix }: { sources: MessageSource[]; idPre
   const sets = sources.filter((s): s is LeadSetReference => s.kind === "lead_set");
   const actions = sources.filter((s): s is LeadActionReference => s.kind === "lead_action");
   const prompts = sources.find((s): s is LeadPromptsReference => s.kind === "lead_prompts");
+  const tables = sources.filter((s): s is TableResultReference => s.kind === "table_result");
   const shownSets = allSets ? sets : sets.slice(0, SETS_SHOWN);
   const leadsOnly = numbered.length > 0 && numbered.every((s) => !isDocumentSource(s));
 
@@ -56,6 +59,10 @@ export function Sources({ sources, idPrefix }: { sources: MessageSource[]; idPre
       {actions.map((a) => (
         <LeadActions key={a.id} action={a} />
       ))}
+      {tables.map((t) => (
+        <TableResult key={t.id} result={t} />
+      ))}
+      {tables.map((t) => t.prompts?.length ? <SuggestedPrompts key={`prompts-${t.id}`} prompts={t.prompts} /> : null)}
       {prompts && <SuggestedPrompts prompts={prompts.prompts} turns={prompts.turns} />}
       {numbered.length > 0 && (
         <div>
